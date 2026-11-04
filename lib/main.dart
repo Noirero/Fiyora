@@ -55,7 +55,7 @@ void main() async {
     await AudioService.init(
       builder: () => getAudioHandler(),
       config: const AudioServiceConfig(
-        androidNotificationChannelId: 'noirero.mrare.preview.audio',
+        androidNotificationChannelId: 'com.noirero.mrare.preview.audio',
         androidNotificationChannelName: 'Mrare beta Audio Player',
         androidNotificationIcon: 'mipmap/ic_launcher',
         androidShowNotificationBadge: true,
