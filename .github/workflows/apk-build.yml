@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - apk-beta
+  workflow_dispatch:
+
+concurrency:
+  group: mrare-beta-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -32,12 +37,67 @@ jobs:
             echo "// Cleared to resolve redeclaration conflict with Kotlin file in same package" > "$FILE"
           fi
 
-      - name: Build ARM64 debug APK
-        run: flutter build apk --debug --target-platform android-arm64 --no-tree-shake-icons
+      - name: Configure permanent Mrare signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MRARE_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.MRARE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.MRARE_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.MRARE_STORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ] || [ -z "$STORE_PASSWORD" ]; then
+            echo "Missing Mrare signing secrets."
+            exit 1
+          fi
+
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/mrare-signing.jks
+          cat > android/key.properties <<EOF
+          storePassword=$STORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=mrare-signing.jks
+          EOF
+
+      - name: Compute monotonic beta version code
+        run: |
+          BUILD_NUMBER=$((100000 + GITHUB_RUN_NUMBER))
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
+          echo "Using Android versionCode=$BUILD_NUMBER"
+
+      - name: Build ARM64 release-signed APK
+        run: |
+          flutter build apk \
+            --release \
+            --target-platform android-arm64 \
+            --build-number "$BUILD_NUMBER" \
+            --no-tree-shake-icons
+
+      - name: Verify ARM64 ABI and APK signature
+        run: |
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          ABIS=$(unzip -Z1 "$APK" | sed -n 's#^lib/\([^/]*\)/.*#\1#p' | sort -u)
+          echo "Packaged ABIs:"
+          echo "$ABIS"
+          if [ "$ABIS" != "arm64-v8a" ]; then
+            echo "Unexpected ABI set. Expected arm64-v8a only."
+            exit 1
+          fi
+
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "apksigner not found"
+            exit 1
+          fi
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+
+      - name: Rename APK
+        run: |
+          mv build/app/outputs/flutter-apk/app-release.apk \
+             build/app/outputs/flutter-apk/Mrare-beta-arm64.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Mrare-beta-arm64-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          name: Mrare-beta-arm64-release-signed
+          path: build/app/outputs/flutter-apk/Mrare-beta-arm64.apk
           if-no-files-found: error
