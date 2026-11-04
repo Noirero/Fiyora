@@ -55,8 +55,8 @@ void main() async {
     await AudioService.init(
       builder: () => getAudioHandler(),
       config: const AudioServiceConfig(
-        androidNotificationChannelId: 'com.rubex.nfile.audio',
-        androidNotificationChannelName: 'NFile Audio Player',
+        androidNotificationChannelId: 'noirero.mrare.preview.audio',
+        androidNotificationChannelName: 'Mrare beta Audio Player',
         androidNotificationIcon: 'mipmap/ic_launcher',
         androidShowNotificationBadge: true,
         androidStopForegroundOnPause: true,
@@ -65,7 +65,7 @@ void main() async {
     );
   } catch (e) {
     // audio_service init failed – background playback unavailable but app continues
-    debugPrint('[NFile] AudioService.init failed: $e');
+    debugPrint('[Mrare beta] AudioService.init failed: $e');
   }
 
   runApp(
@@ -316,7 +316,7 @@ class _NFileAppState extends State<NFileApp> {
 
             return MaterialApp(
               navigatorKey: navigatorKey,
-              title: 'NFile',
+              title: 'Mrare beta',
               debugShowCheckedModeBanner: false,
               theme: AppTheme.getAppTheme(light: true, seed: baseSeedColor, customScheme: activeLightScheme, fontFamily: fileManager.fontFamilyOption),
               darkTheme: AppTheme.getAppTheme(light: false, pitchBlack: fileManager.amoledMode, seed: baseSeedColor, customScheme: activeDarkScheme, fontFamily: fileManager.fontFamilyOption),
@@ -465,7 +465,7 @@ class _StoragePermissionShield extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'NFile requires storage permission to manage, organize, and display your media files seamlessly.',
+                  'Mrare beta requires storage permission to manage, organize, and display your media files seamlessly.',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey),
                 ),
