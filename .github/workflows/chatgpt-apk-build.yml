@@ -1,9 +1,9 @@
-name: ChatGPT APK Build
+name: APK Build
 
 on:
   push:
     branches:
-      - chatgpt/apk-build
+      - apk-build
 
 jobs:
   build:
