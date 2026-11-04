@@ -63,17 +63,17 @@ jobs:
           echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
           echo "Using Android versionCode=$BUILD_NUMBER"
 
-      - name: Build ARM64 release-signed APK
+      - name: Build ABI-split release APKs
         run: |
           flutter build apk \
             --release \
-            --target-platform android-arm64 \
+            --split-per-abi \
             --build-number "$BUILD_NUMBER" \
             --no-tree-shake-icons
 
-      - name: Verify ARM64 ABI and APK signature
+      - name: Verify ARM64 APK and signature
         run: |
-          APK="build/app/outputs/flutter-apk/app-release.apk"
+          APK="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
 
           ABIS=$(unzip -Z1 "$APK" | sed -n 's#^lib/\([^/]*\)/.*#\1#p' | sort -u)
           echo "Packaged ABIs:"
@@ -92,7 +92,7 @@ jobs:
 
       - name: Rename APK
         run: |
-          mv build/app/outputs/flutter-apk/app-release.apk \
+          mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
              build/app/outputs/flutter-apk/Mrare-beta-arm64.apk
 
       - name: Upload APK
