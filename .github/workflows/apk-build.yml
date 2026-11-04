@@ -3,6 +3,7 @@ name: APK Build
 on:
   push:
     branches:
+      - apk-beta
       - apk-build
 
 jobs:
