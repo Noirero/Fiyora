@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - apk-beta
-      - apk-build
 
 jobs:
   build:
@@ -39,6 +38,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NFile-arm64-debug-apk
+          name: Mrare-beta-arm64-debug-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
