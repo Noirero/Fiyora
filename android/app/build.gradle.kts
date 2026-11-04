@@ -41,7 +41,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "noirero.mrare.preview"
+        applicationId = "com.noirero.mrare.preview"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
