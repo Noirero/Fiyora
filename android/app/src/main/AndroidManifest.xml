@@ -24,7 +24,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
-        android:label="NFile"
+        android:label="Fiyora Explorer"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="true"
@@ -104,7 +104,7 @@
             android:enabled="true"
             android:exported="true"
             android:icon="@mipmap/ic_launcher"
-            android:label="NFile"
+            android:label="Fiyora Explorer"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -117,7 +117,7 @@
             android:enabled="false"
             android:exported="true"
             android:icon="@drawable/n1"
-            android:label="NFile"
+            android:label="Fiyora Explorer"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -130,7 +130,7 @@
             android:enabled="false"
             android:exported="true"
             android:icon="@drawable/n2"
-            android:label="NFile"
+            android:label="Fiyora Explorer"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -143,7 +143,7 @@
             android:enabled="false"
             android:exported="true"
             android:icon="@drawable/n3"
-            android:label="NFile"
+            android:label="Fiyora Explorer"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -156,7 +156,7 @@
             android:enabled="false"
             android:exported="true"
             android:icon="@drawable/n4"
-            android:label="NFile"
+            android:label="Fiyora Explorer"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
