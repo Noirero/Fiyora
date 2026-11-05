@@ -12,6 +12,7 @@ import 'package:provider/provider.dart';
 import '../ui/widgets/background_operation_progress_dialog.dart';
 import 'archive_path_safety.dart';
 import 'archive_extraction_safety.dart';
+import 'archive_format_support.dart';
 import 'archive_no_overwrite_safety.dart';
 
 class BackgroundOperation {
@@ -417,6 +418,7 @@ class BackgroundArchiveService {
     final password = args['password'] as String?;
 
     try {
+      ArchiveFormatSupport.requireExtractable(archivePath, background: true);
       sendPort.send({'status': 'progress', 'progress': 0.0, 'currentFile': 'Reading archive...'});
 
       final file = File(archivePath);
