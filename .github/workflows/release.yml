@@ -1,0 +1,199 @@
+name: release (Fiyora stable candidate)
+
+# Manual, audited promotion. Never automatically publishes main on push.
+on:
+  workflow_dispatch:
+    inputs:
+      tested_beta_tag:
+        description: 'Existing Fiyora beta prerelease tag that passed device testing'
+        required: true
+        type: string
+      tested_beta_ci_run_id:
+        description: 'Successful apk-beta CI run ID for the exact tested source commit'
+        required: true
+        type: string
+      device_test_approved:
+        description: 'I tested the specified Fiyora beta on a physical device'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fiyora-stable-candidate
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    name: Verify promotion and prepare stable APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Confirm physical beta test attestation
+        shell: bash
+        env:
+          APPROVED: ${{ inputs.device_test_approved }}
+        run: |
+          test "$APPROVED" = true || { echo 'Beta device test has not been approved'; exit 1; }
+
+      - name: Checkout main with full ancestry
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify beta build, promotion lineage and stable identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_BETA_TAG: ${{ inputs.tested_beta_tag }}
+          BETA_CI_RUN_ID: ${{ inputs.tested_beta_ci_run_id }}
+        run: |
+          set -euo pipefail
+          # Avoid tag-name option injection, path manipulation or unrelated releases.
+          [[ "$TESTED_BETA_TAG" =~ ^fiyora-beta-v[0-9]+\.[0-9]+\.[0-9]+-r[0-9]+-a[0-9]+$ ]]
+          [[ "$BETA_CI_RUN_ID" =~ ^[0-9]+$ ]]
+          MAIN_SHA="$(git rev-parse HEAD)"
+          test "$MAIN_SHA" = "$GITHUB_SHA" || { echo 'Dispatch SHA mismatch'; exit 1; }
+          CURRENT_MAIN="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          test "$MAIN_SHA" = "$CURRENT_MAIN" || { echo 'main moved after checkout'; exit 1; }
+
+          RELEASE="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TESTED_BETA_TAG}")"
+          echo "$RELEASE" | jq -e '.prerelease == true and .draft == false and (.assets | length) > 0' >/dev/null
+          git fetch --no-tags origin "refs/tags/${TESTED_BETA_TAG}:refs/tags/${TESTED_BETA_TAG}"
+          BETA_SHA="$(git rev-parse "${TESTED_BETA_TAG}^{commit}")"
+
+          CI_RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${BETA_CI_RUN_ID}")"
+          echo "$CI_RUN" | jq -e --arg sha "$BETA_SHA" '
+            .head_branch == "apk-beta" and .head_sha == $sha and
+            .conclusion == "success" and
+            .path == ".github/workflows/apk-build.yml"' >/dev/null
+
+          git merge-base --is-ancestor "$BETA_SHA" "$MAIN_SHA" || {
+            echo 'Tested beta commit is not an ancestor of main. Promote with a merge commit (not squash), then retest/approve as appropriate.'
+            exit 1
+          }
+          # Fiyora stable keeps the original NFile package ID for upgrade compatibility.
+          grep -Fq 'applicationId = "com.rubex.nfile"' android/app/build.gradle.kts
+          grep -Fq 'android:label="Fiyora Explorer"' android/app/src/main/AndroidManifest.xml
+          VERSION="$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' pubspec.yaml | head -n1)"
+          test -n "$VERSION"
+          TAG="v${VERSION}"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Stable tag ${TAG} already exists. Refusing to overwrite a prior release."
+            exit 1
+          fi
+          echo "SOURCE_SHA=$MAIN_SHA" >> "$GITHUB_ENV"
+          echo "BETA_SHA=$BETA_SHA" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - name: Run Flutter regression tests
+        run: flutter test
+
+      - name: Apply existing flutter_avif_android CI workaround
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="$(find "$HOME/.pub-cache" -name FlutterAvifPlugin.java -print -quit 2>/dev/null || true)"
+          if [ -n "$FILE" ]; then
+            echo '// Workaround: duplicate class conflicts with Kotlin plugin.' > "$FILE"
+          fi
+
+      - name: Configure stable NFile-compatible signing key
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for value in "$KEYSTORE_BASE64" "$KEY_ALIAS" "$KEY_PASSWORD" "$STORE_PASSWORD"; do
+            test -n "$value" || { echo 'Stable signing secrets are incomplete'; exit 1; }
+          done
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
+          {
+            printf 'storePassword=%s\n' "$STORE_PASSWORD"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'storeFile=upload-keystore.jks\n'
+          } > android/key.properties
+          chmod 600 android/key.properties android/app/upload-keystore.jks
+
+      - name: Build stable release-mode APKs
+        run: |
+          flutter build apk --release --split-per-abi --obfuscate \
+            --split-debug-info=build/app/outputs/symbols --no-tree-shake-icons
+
+      - name: Validate stable APK package and signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n1)"
+          AAPT="$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n1)"
+          test -x "$APKSIGNER" && test -x "$AAPT"
+          mkdir -p dist
+          for ABI in arm64-v8a armeabi-v7a x86_64; do
+            APK="build/app/outputs/flutter-apk/app-${ABI}-release.apk"
+            test -s "$APK"
+            "$APKSIGNER" verify --print-certs "$APK"
+            "$AAPT" dump badging "$APK" | grep -Fq "package: name='com.rubex.nfile'"
+            cp "$APK" "dist/Fiyora-v${APP_VERSION}-${ABI}.apk"
+          done
+          (cd dist && sha256sum ./*.apk > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Upload candidate APKs for final device acceptance
+        uses: actions/upload-artifact@v4
+        with:
+          name: fiyora-stable-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/
+          if-no-files-found: error
+
+      - name: Upload obfuscation symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: fiyora-stable-symbols-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/app/outputs/symbols/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Create unpublished draft stable release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ env.SOURCE_SHA }}
+          name: Fiyora ${{ env.APP_VERSION }} (candidate)
+          prerelease: false
+          draft: true
+          make_latest: false
+          body: |
+            **DRAFT ONLY — do not publish until the exact stable candidate APK has completed final device acceptance.**
+
+            Stable source on `main`: `${{ env.SOURCE_SHA }}`
+            Previously tested beta source: `${{ env.BETA_SHA }}`
+            Previously tested beta prerelease: `${{ inputs.tested_beta_tag }}`
+            Successful beta CI: `${{ inputs.tested_beta_ci_run_id }}`
+            Beta physical test attested by manual workflow operator.
+            **Note:** Stable binaries differ from preview binaries (package ID and signing key). Verify the final signed candidate on a physical device before publication.
+          files: dist/*
+          fail_on_unmatched_files: true
