@@ -2699,11 +2699,12 @@ class FileManagerProvider extends ChangeNotifier {
 
     // The background worker does not support split or separate outputs.
     // Use the existing ArchiveService implementation for these options.
-    if (shouldUseBackgroundArchiveCreation(
-      hasContext: context != null,
-      separateArchives: separateArchives,
-      splitSizeMB: splitSizeMB,
-    )) {
+    if (context != null &&
+        shouldUseBackgroundArchiveCreation(
+          hasContext: true,
+          separateArchives: separateArchives,
+          splitSizeMB: splitSizeMB,
+        )) {
       selectedPaths.clear();
       final destinationPath = p.join(currentPath, '$archiveName.$format');
       await BackgroundArchiveService.instance.startCompression(
