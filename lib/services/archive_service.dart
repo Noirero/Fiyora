@@ -5,6 +5,7 @@ import 'package:archive/archive_io.dart';
 import 'package:dart_lz4/dart_lz4.dart';
 import 'package:just_zstd/just_zstd.dart';
 import 'archive_path_safety.dart';
+import 'archive_atomic_write.dart';
 import 'archive_extraction_safety.dart';
 
 class ArchiveService {
@@ -510,7 +511,7 @@ class ArchiveService {
       }
 
       if (newArchiveBytes != null) {
-        archiveFile.writeAsBytesSync(newArchiveBytes);
+        replaceArchiveFileContentsAtomically(archiveFile, newArchiveBytes);
         return true;
       }
       return false;
@@ -622,7 +623,7 @@ class ArchiveService {
       }
 
       if (newArchiveBytes != null) {
-        archiveFile.writeAsBytesSync(newArchiveBytes);
+        replaceArchiveFileContentsAtomically(archiveFile, newArchiveBytes);
         return true;
       }
       return false;
