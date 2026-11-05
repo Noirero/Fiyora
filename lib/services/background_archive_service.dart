@@ -468,6 +468,7 @@ class BackgroundArchiveService {
           }
         }
         inputStream.closeSync();
+        rollback.complete();
         sendPort.send({'status': 'completed'});
         return;
       }
@@ -521,6 +522,7 @@ class BackgroundArchiveService {
         try {
           tempTarFile.deleteSync();
         } catch (_) {}
+        rollback.complete();
         sendPort.send({'status': 'completed'});
         return;
       }
@@ -563,6 +565,7 @@ class BackgroundArchiveService {
           }
         }
         inputStream.closeSync();
+        rollback.complete();
         sendPort.send({'status': 'completed'});
         return;
       }
@@ -590,6 +593,7 @@ class BackgroundArchiveService {
         } finally {
           rollback.noteFileWritten(destFile.path);
         }
+        rollback.complete();
         sendPort.send({'status': 'completed'});
         return;
       } else if (lowerPath.endsWith('.bz2')) {
@@ -602,6 +606,7 @@ class BackgroundArchiveService {
         } finally {
           rollback.noteFileWritten(destFile.path);
         }
+        rollback.complete();
         sendPort.send({'status': 'completed'});
         return;
       } else if (lowerPath.endsWith('.lz4')) {
@@ -614,6 +619,7 @@ class BackgroundArchiveService {
         } finally {
           rollback.noteFileWritten(destFile.path);
         }
+        rollback.complete();
         sendPort.send({'status': 'completed'});
         return;
       } else if (lowerPath.endsWith('.zst') || lowerPath.endsWith('.zstd')) {
@@ -626,6 +632,7 @@ class BackgroundArchiveService {
         } finally {
           rollback.noteFileWritten(destFile.path);
         }
+        rollback.complete();
         sendPort.send({'status': 'completed'});
         return;
       } else {
@@ -667,6 +674,7 @@ class BackgroundArchiveService {
             }
           }
           inputStream.closeSync();
+          rollback.complete();
           sendPort.send({'status': 'completed'});
           return;
         } catch (_) {
@@ -709,6 +717,7 @@ class BackgroundArchiveService {
         'currentFile': 'Archive extracted successfully',
       });
       await Future.delayed(const Duration(milliseconds: 300));
+      rollback.complete();
       sendPort.send({'status': 'completed'});
     } catch (e) {
       rollback.rollback();

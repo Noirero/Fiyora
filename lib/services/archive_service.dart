@@ -263,6 +263,7 @@ class ArchiveService {
           }
         }
         inputStream.closeSync();
+        rollback.complete();
         return;
       }
 
@@ -303,6 +304,7 @@ class ArchiveService {
         try {
           tempTarFile.deleteSync();
         } catch (_) {}
+        rollback.complete();
         return;
       }
 
@@ -333,6 +335,7 @@ class ArchiveService {
           }
         }
         inputStream.closeSync();
+        rollback.complete();
         return;
       }
 
@@ -358,6 +361,7 @@ class ArchiveService {
         } finally {
           rollback.noteFileWritten(destFile.path);
         }
+        rollback.complete();
         return;
       } else if (lowerPath.endsWith('.bz2')) {
         final decodedBytes = BZip2Decoder().decodeBytes(bytes);
@@ -369,6 +373,7 @@ class ArchiveService {
         } finally {
           rollback.noteFileWritten(destFile.path);
         }
+        rollback.complete();
         return;
       } else if (lowerPath.endsWith('.lz4')) {
         final decodedBytes = lz4FrameDecode(bytes);
@@ -380,6 +385,7 @@ class ArchiveService {
         } finally {
           rollback.noteFileWritten(destFile.path);
         }
+        rollback.complete();
         return;
       } else if (lowerPath.endsWith('.zst') || lowerPath.endsWith('.zstd')) {
         final decodedBytes = const ZstdDecoder().decodeBytes(bytes);
@@ -391,6 +397,7 @@ class ArchiveService {
         } finally {
           rollback.noteFileWritten(destFile.path);
         }
+        rollback.complete();
         return;
       } else {
         // try streaming zip for unknown extension to avoid OOM
@@ -420,6 +427,7 @@ class ArchiveService {
             }
           }
           inputStream.closeSync();
+          rollback.complete();
           return;
         } catch (_) {
           inputStream.closeSync();
@@ -443,6 +451,7 @@ class ArchiveService {
           rollback.createDirectory(checkedArchiveExtractionPath(destinationDir, filename));
         }
       }
+      rollback.complete();
     } catch (e) {
       rollback.rollback();
       rethrow;

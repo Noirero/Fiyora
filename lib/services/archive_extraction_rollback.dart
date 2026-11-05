@@ -1,28 +1,37 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:path/path.dart' as p;
 
-/// Best-effort rollback of new paths created by one extraction attempt.
+/// Best-effort rollback of new paths created by a single extraction attempt.
 ///
-/// Snapshot checks prevent deletion of *observably changed* paths, but
-/// dart:io does not expose an atomic compare-identity-and-unlink primitive.
-/// Concurrent replacements that reproduce the same metadata or occur between
-/// the final check and deletion are NOT proven safe. Do not use this as a
-/// full transactional or concurrent-ownership guarantee.
+/// Exclusive file creation and operation-specific directory markers protect
+/// against commonly observable replacement races. File metadata is a
+/// conservative change detector, NOT a stable object identity. Dart has no
+/// portable atomic identity-checked unlink; an external actor can still race
+/// the final check/delete. This is not a concurrent transaction.
 class ArchiveExtractionRollback {
   final List<_TrackedPath> _createdFiles = [];
-  final List<_TrackedPath> _createdDirectories = [];
+  final List<_TrackedDirectory> _createdDirectories = [];
+  final String _token = _newToken();
+  int _markerSerial = 0;
+
+  static String _newToken() {
+    final random = Random.secure();
+    return List.generate(
+      16,
+      (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ).join();
+  }
 
   void createFile(String path) {
     _ensureParentDirectories(path);
     final file = File(path);
     file.createSync(exclusive: true);
     _createdFiles.add(_TrackedPath(file.path, file.statSync()));
-    _refreshCreatedParentStamps(path);
   }
 
-  /// Must be called after closing an output stream (including on write error).
-  /// If a different actor has changed the output by rollback time, skip it.
+  /// Call after closing the writer, including when a write throws.
   void noteFileWritten(String path) {
     for (final tracked in _createdFiles.reversed) {
       if (tracked.path != path) continue;
@@ -47,9 +56,23 @@ class ArchiveExtractionRollback {
         path,
       );
     }
+    _createTrackedDirectory(path);
+  }
+
+  void _createTrackedDirectory(String path) {
     Directory(path).createSync();
-    _createdDirectories.add(_TrackedPath(path, FileStat.statSync(path)));
-    _refreshCreatedParentStamps(path);
+    // The marker is created only in a directory made by THIS extraction.
+    // A replacement directory will lack this marker even if timestamps match.
+    final marker = p.join(path, '.fiyora-extract-rollback-$_token-${_markerSerial++}');
+    try {
+      final file = File(marker);
+      file.createSync(exclusive: true);
+      file.writeAsStringSync(_token);
+      _createdDirectories.add(_TrackedDirectory(path, marker));
+    } catch (_) {
+      // Do not delete an uncertain path on marker failure.
+      rethrow;
+    }
   }
 
   void _ensureParentDirectories(String path) {
@@ -58,10 +81,7 @@ class ArchiveExtractionRollback {
     while (!Directory(parent).existsSync()) {
       if (FileSystemEntity.typeSync(parent, followLinks: false) !=
           FileSystemEntityType.notFound) {
-        throw FileSystemException(
-          'Archive output parent is not a directory',
-          parent,
-        );
+        throw FileSystemException('Archive output parent is not a directory', parent);
       }
       missing.add(parent);
       final next = p.dirname(parent);
@@ -74,18 +94,7 @@ class ArchiveExtractionRollback {
       throw FileSystemException('Archive output parent is a symbolic link', path);
     }
     for (final directory in missing.reversed) {
-      Directory(directory).createSync();
-      _createdDirectories.add(_TrackedPath(directory, FileStat.statSync(directory)));
-      _refreshCreatedParentStamps(directory);
-    }
-  }
-
-  void _refreshCreatedParentStamps(String path) {
-    for (final tracked in _createdDirectories) {
-      if (!p.isWithin(tracked.path, path)) continue;
-      try {
-        tracked.stamp = FileStat.statSync(tracked.path);
-      } catch (_) {}
+      _createTrackedDirectory(directory);
     }
   }
 
@@ -102,15 +111,16 @@ class ArchiveExtractionRollback {
     }
   }
 
-  bool _unchanged(_TrackedPath tracked, FileSystemEntityType kind) {
+  bool _unchangedFile(_TrackedPath tracked) {
     try {
       if (!_parentsHaveNoSymlinks(tracked.path) ||
-          FileSystemEntity.typeSync(tracked.path, followLinks: false) != kind) {
+          FileSystemEntity.typeSync(tracked.path, followLinks: false) !=
+              FileSystemEntityType.file) {
         return false;
       }
       final current = FileStat.statSync(tracked.path);
       final expected = tracked.stamp;
-      return current.type == kind &&
+      return current.type == FileSystemEntityType.file &&
           current.size == expected.size &&
           current.mode == expected.mode &&
           current.changed == expected.changed &&
@@ -120,31 +130,46 @@ class ArchiveExtractionRollback {
     }
   }
 
-  void rollback() {
-    // Evaluate directories BEFORE file cleanup, which changes parent stamps.
-    final originalDirectories = <String, bool>{
-      for (final tracked in _createdDirectories)
-        tracked.path: _unchanged(tracked, FileSystemEntityType.directory),
-    };
+  bool _ownsDirectory(_TrackedDirectory dir) {
+    try {
+      if (!_parentsHaveNoSymlinks(dir.path) ||
+          FileSystemEntity.typeSync(dir.path, followLinks: false) !=
+              FileSystemEntityType.directory ||
+          FileSystemEntity.typeSync(dir.marker, followLinks: false) !=
+              FileSystemEntityType.file) {
+        return false;
+      }
+      return File(dir.marker).readAsStringSync() == _token;
+    } catch (_) {
+      return false;
+    }
+  }
 
+  /// Remove private markers after successful extraction; keep user outputs.
+  void complete() {
+    for (final dir in _createdDirectories.reversed) {
+      try {
+        if (_ownsDirectory(dir)) File(dir.marker).deleteSync();
+      } catch (_) {}
+    }
+  }
+
+  void rollback() {
+    // Delete only unchanged files and operation-marked directories.
+    // Never use recursive deletion on a user-visible destination.
     for (final tracked in _createdFiles.reversed) {
       try {
-        if (_unchanged(tracked, FileSystemEntityType.file)) {
-          File(tracked.path).deleteSync();
-        }
+        if (_unchangedFile(tracked)) File(tracked.path).deleteSync();
       } catch (_) {
-        // Original extraction error takes priority over cleanup failure.
+        // Keep original extraction failure; leave ambiguous ownership intact.
       }
     }
-    for (final tracked in _createdDirectories.reversed) {
+    for (final dir in _createdDirectories.reversed) {
       try {
-        if (originalDirectories[tracked.path] == true &&
-            _parentsHaveNoSymlinks(tracked.path) &&
-            FileSystemEntity.typeSync(tracked.path, followLinks: false) ==
-                FileSystemEntityType.directory) {
-          // Nonrecursive; refuse to delete directories with any contents.
-          Directory(tracked.path).deleteSync();
-        }
+        if (!_ownsDirectory(dir)) continue;
+        File(dir.marker).deleteSync();
+        // Nonrecursive delete refuses to remove another actor's new contents.
+        Directory(dir.path).deleteSync();
       } catch (_) {}
     }
   }
@@ -154,4 +179,10 @@ class _TrackedPath {
   _TrackedPath(this.path, this.stamp);
   final String path;
   FileStat stamp;
+}
+
+class _TrackedDirectory {
+  _TrackedDirectory(this.path, this.marker);
+  final String path;
+  final String marker;
 }
