@@ -10,6 +10,7 @@ import 'package:just_zstd/just_zstd.dart';
 import '../providers/file_manager_provider.dart';
 import 'package:provider/provider.dart';
 import '../ui/widgets/background_operation_progress_dialog.dart';
+import 'archive_path_safety.dart';
 
 class BackgroundOperation {
   final String id;
@@ -78,7 +79,7 @@ class BackgroundArchiveService {
     _receivePort = ReceivePort();
 
     _activeIsolate = await Isolate.spawn(
-      _compressIsolateTask,
+      compressIsolateTask,
       {
         'sendPort': _receivePort!.sendPort,
         'sourcePaths': sourcePaths,
@@ -264,7 +265,8 @@ class BackgroundArchiveService {
     activeOperation.value = null;
   }
 
-  static void _compressIsolateTask(Map<String, dynamic> args) async {
+  @visibleForTesting
+  static Future<void> compressIsolateTask(Map<String, dynamic> args) async {
     final sendPort = args['sendPort'] as SendPort;
     final sourcePaths = args['sourcePaths'] as List<String>;
     final destinationPath = args['destinationPath'] as String;
@@ -273,6 +275,11 @@ class BackgroundArchiveService {
     final deleteSource = args['deleteSource'] as bool;
 
     try {
+      validateArchiveDestinations(
+        sourcePaths: sourcePaths,
+        destinationPaths: [destinationPath],
+        deleteSource: deleteSource,
+      );
       sendPort.send({'status': 'progress', 'progress': 0.0, 'currentFile': 'Scanning files...'});
 
       final allFiles = <_FileEntry>[];
@@ -353,11 +360,21 @@ class BackgroundArchiveService {
         'currentFile': 'Saving archive to disk...',
       });
 
+      validateArchiveDestinations(
+        sourcePaths: sourcePaths,
+        destinationPaths: [destinationPath],
+        deleteSource: deleteSource,
+      );
       final outFile = File(destinationPath);
       outFile.createSync(recursive: true);
       outFile.writeAsBytesSync(encodedBytes);
 
       if (deleteSource) {
+        validateArchiveDestinations(
+          sourcePaths: sourcePaths,
+          destinationPaths: [destinationPath],
+          deleteSource: true,
+        );
         for (final path in sourcePaths) {
           final type = FileSystemEntity.typeSync(path);
           if (type == FileSystemEntityType.directory) {
