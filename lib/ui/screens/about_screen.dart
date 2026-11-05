@@ -51,7 +51,7 @@ class AboutNFileScreen extends StatelessWidget {
             flexibleSpace: FlexibleSpaceBar(
               centerTitle: true,
               title: Text(
-                'About NFile',
+                'About Fiyora',
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 20,
@@ -147,7 +147,7 @@ class AboutNFileScreen extends StatelessWidget {
 
                   // ── App Title & Dynamic Badges ──
                   Text(
-                    'NFile',
+                    'Fiyora',
                     style: theme.textTheme.headlineMedium?.copyWith(
                       fontWeight: FontWeight.bold,
                       letterSpacing: 0.8,
@@ -184,7 +184,7 @@ class AboutNFileScreen extends StatelessWidget {
                       border: Border.all(color: borderCol),
                     ),
                     child: Text(
-                      'NFile is a beautiful, fluid, and open-source file manager and offline media hub built with Flutter. Designed for extreme performance, clean glassmorphic aesthetics, and seamless user experiences.',
+                      'Fiyora Explorer is a beautiful, fluid, and open-source file manager and offline media hub built with Flutter. Designed for extreme performance, clean glassmorphic aesthetics, and seamless user experiences.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: theme.colorScheme.onSurface.withOpacity(0.85),
@@ -288,8 +288,8 @@ class AboutNFileScreen extends StatelessWidget {
                     label: 'Share App with Friends',
                     onTap: () {
                       Share.share(
-                        'Check out NFile, a beautiful offline file manager and media hub: https://github.com/Senzme/NFile/releases',
-                        subject: 'NFile - Beautiful File Manager',
+                        'Check out Fiyora Explorer, a beautiful offline file manager and media hub: https://github.com/Senzme/NFile/releases',
+                        subject: 'Fiyora Explorer - File Manager',
                       );
                     },
                   ),
