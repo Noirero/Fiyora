@@ -1,0 +1,153 @@
+name: beta — Fiyora Beta (manual)
+
+# Workflow exists on default branch, but sources the preview app from apk-beta.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fiyora-beta-publish
+  cancel-in-progress: false
+
+jobs:
+  beta:
+    name: Publish Fiyora beta (apk-beta)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - name: Enforce manual dispatch from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+      - name: Checkout tested preview source
+        uses: actions/checkout@v4
+        with:
+          ref: apk-beta
+          persist-credentials: false
+
+      - name: Capture source and assert beta identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'applicationId = "com.noirero.fiyora.preview"' android/app/build.gradle.kts
+          grep -Fq 'android:label="Fiyora Explorer Beta"' android/app/src/main/AndroidManifest.xml
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          VERSION="$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' pubspec.yaml | head -n1)"
+          test -n "$VERSION"
+          TAG="fiyora-beta-v${VERSION}-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+          echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          # Existing preview workflow used 100000 + its own run number; use a
+          # higher range so upgrades from previous preview APKs are possible.
+          echo "BUILD_NUMBER=$((200000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Apply existing flutter_avif_android CI workaround
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="$(find "$HOME/.pub-cache" -name FlutterAvifPlugin.java -print -quit 2>/dev/null || true)"
+          if [ -n "$FILE" ]; then
+            echo '// Workaround: duplicate class conflicts with Kotlin plugin.' > "$FILE"
+          fi
+
+      - name: Configure preview signing (existing secret names)
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MRARE_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.MRARE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.MRARE_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.MRARE_STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for value in "$KEYSTORE_BASE64" "$KEY_ALIAS" "$KEY_PASSWORD" "$STORE_PASSWORD"; do
+            test -n "$value" || { echo 'Preview signing secrets are incomplete'; exit 1; }
+          done
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/fiyora-signing.jks
+          {
+            printf 'storePassword=%s\n' "$STORE_PASSWORD"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'storeFile=fiyora-signing.jks\n'
+          } > android/key.properties
+          chmod 600 android/key.properties android/app/fiyora-signing.jks
+
+      - name: Build ARM64 preview APK
+        run: |
+          flutter build apk --release --split-per-abi \
+            --build-number "$BUILD_NUMBER" --no-tree-shake-icons
+
+      - name: Verify and collect beta APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          test -s "$APK"
+          ABIS="$(unzip -Z1 "$APK" | sed -n 's#^lib/\([^/]*\)/.*#\1#p' | sort -u)"
+          test "$ABIS" = arm64-v8a || { echo "Unexpected ABI(s): $ABIS"; exit 1; }
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n1)"
+          AAPT="$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n1)"
+          test -x "$APKSIGNER" && test -x "$AAPT"
+          "$APKSIGNER" verify --print-certs "$APK"
+          "$AAPT" dump badging "$APK" | grep -Fq "package: name='com.noirero.fiyora.preview'"
+          mkdir -p dist
+          cp "$APK" "dist/Fiyora-beta-v${APP_VERSION}-arm64-v8a.apk"
+          (cd dist && sha256sum ./*.apk > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Upload immutable build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fiyora-beta-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/
+          if-no-files-found: error
+
+      - name: Ensure beta branch still matches the built source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CURRENT_BETA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/apk-beta" --jq .object.sha)"
+          test "$CURRENT_BETA" = "$SOURCE_SHA" || {
+            echo 'apk-beta changed during the build; refusing to publish a stale preview.'
+            exit 1
+          }
+
+      - name: Publish beta GitHub prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ env.SOURCE_SHA }}
+          name: Fiyora Beta ${{ env.APP_VERSION }} (run ${{ github.run_id }})
+          prerelease: true
+          draft: false
+          make_latest: false
+          body: |
+            Preview build from `apk-beta`.
+
+            Source commit: `${{ env.SOURCE_SHA }}`
+            Build workflow: `${{ github.workflow }}` / run `${{ github.run_id }}` (attempt `${{ github.run_attempt }}`).
+            Package ID: `com.noirero.fiyora.preview` (does not replace production Fiyora/NFile installation).
+            This build requires explicit beta testing; CI success is not physical-device acceptance.
+          files: dist/*
+          fail_on_unmatched_files: true

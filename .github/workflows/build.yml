@@ -1,141 +1,69 @@
-name: Build APK
+name: Fiyora PR Build Check
 
+# Only validates changes; it cannot publish GitHub Releases.
 on:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - '**.md'
-      - '.gitignore'
-      - 'LICENSE'
-      - 'docs/**'
-      - 'fastlane/**'
-      - 'metadata/**'
   pull_request:
     branches:
       - main
-    paths-ignore:
-      - '**.md'
-      - '.gitignore'
-      - 'LICENSE'
-      - 'docs/**'
-      - 'fastlane/**'
-      - 'metadata/**'
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: fiyora-validate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build Release APK
+    name: Compile and test (no production signing)
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
+    timeout-minutes: 60
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Get App Version
-        id: get_version
-        run: |
-          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d '+' -f 1)
-          echo "APP_VERSION=v$VERSION" >> $GITHUB_ENV
-
-      - name: Check if Version Already Released
-        id: check_release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if gh release view ${{ env.APP_VERSION }} --repo ${{ github.repository }} >/dev/null 2>&1; then
-            echo "Version ${{ env.APP_VERSION }} is already released. Skipping build!"
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "Version ${{ env.APP_VERSION }} is new. Proceeding with build!"
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Set up Java
-        if: steps.check_release.outputs.exists == 'false'
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
         with:
-          distribution: 'zulu'
+          persist-credentials: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
           java-version: '17'
 
-      - name: Set up Flutter
-        if: steps.check_release.outputs.exists == 'false'
-        uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.x'
-          channel: 'stable'
+          channel: stable
+          cache: true
 
-      - name: Install Dependencies
-        if: steps.check_release.outputs.exists == 'false'
-        run: flutter pub get
+      - run: flutter pub get
+      - run: flutter test
 
-      - name: Patch flutter_avif_android duplicate class
-        if: steps.check_release.outputs.exists == 'false'
+      - name: Apply existing flutter_avif_android CI workaround
+        shell: bash
         run: |
-          FILE=$(find $HOME/.pub-cache -name "FlutterAvifPlugin.java" 2>/dev/null | head -1)
+          set -euo pipefail
+          FILE="$(find "$HOME/.pub-cache" -name FlutterAvifPlugin.java -print -quit 2>/dev/null || true)"
           if [ -n "$FILE" ]; then
-            echo "// Cleared to resolve redeclaration conflict with Kotlin file in same package" > "$FILE"
-            echo "Patched: $FILE"
-          else
-            echo "flutter_avif_android Java file not found, skipping patch."
+            echo '// Workaround: duplicate class conflicts with Kotlin plugin.' > "$FILE"
           fi
 
-      - name: Configure Keystore and Signing
-        if: steps.check_release.outputs.exists == 'false'
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+      - name: Generate throwaway CI signing key for release-mode compilation
+        shell: bash
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
-            cat <<EOF > android/key.properties
-          storePassword=$STORE_PASSWORD
-          keyPassword=$KEY_PASSWORD
-          keyAlias=$KEY_ALIAS
-          storeFile=upload-keystore.jks
+          set -euo pipefail
+          keytool -genkeypair -noprompt -storetype JKS -keyalg RSA -keysize 2048 \
+            -validity 2 -alias ci-only -dname 'CN=CI,O=Fiyora,C=ID' \
+            -keystore android/app/ci-only.jks -storepass ci-only-pass -keypass ci-only-pass
+          cat > android/key.properties <<'EOF'
+          storePassword=ci-only-pass
+          keyPassword=ci-only-pass
+          keyAlias=ci-only
+          storeFile=ci-only.jks
           EOF
-          else
-            echo "Keystore secrets not found, skipping cryptographic signing setup."
-          fi
 
-      - name: Build Split APKs
-        if: steps.check_release.outputs.exists == 'false'
-        run: flutter build apk --release --split-per-abi --obfuscate --split-debug-info=build/app/outputs/symbols --no-tree-shake-icons
+      - name: Compile Android release flavor (check only)
+        run: flutter build apk --release --target-platform android-arm64 --no-tree-shake-icons
 
-      - name: Rename APKs
-        if: steps.check_release.outputs.exists == 'false'
-        run: |
-          mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk build/app/outputs/flutter-apk/NFile-${{ env.APP_VERSION }}-arm64-v8a.apk
-          mv build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk build/app/outputs/flutter-apk/NFile-${{ env.APP_VERSION }}-armeabi-v7a.apk
-          mv build/app/outputs/flutter-apk/app-x86_64-release.apk build/app/outputs/flutter-apk/NFile-${{ env.APP_VERSION }}-x86_64.apk
-
-      - name: Upload APKs to Artifacts
-        if: steps.check_release.outputs.exists == 'false'
-        uses: actions/upload-artifact@v4
-        with:
-          name: nfile-${{ env.APP_VERSION }}-apks
-          path: build/app/outputs/flutter-apk/NFile-${{ env.APP_VERSION }}-*.apk
-
-      - name: Release APKs
-        if: steps.check_release.outputs.exists == 'false' && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.APP_VERSION }}
-          name: "NFile Release ${{ env.APP_VERSION }}"
-          body: |
-            ### Official NFile Production Release ${{ env.APP_VERSION }}
-            * **Optimized & Architecture Split**: Download `arm64-v8a` for 64-bit modern devices.
-            * Professionally signed and compiled with R8 code shrinking, Dart obfuscation, and uncompressed native libs.
-          draft: false
-          prerelease: false
-          make_latest: true
-          files: build/app/outputs/flutter-apk/NFile-${{ env.APP_VERSION }}-*.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify nonproduction artifact is produced
+        run: test -s build/app/outputs/flutter-apk/app-release.apk
