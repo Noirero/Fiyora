@@ -1,0 +1,30 @@
+name: AR-011 temporary archive capability validation (no release)
+
+on:
+  push:
+    branches:
+      - review/ar011-archive-format-capability-20261105
+
+permissions:
+  contents: read
+
+jobs:
+  ar011-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.44.0'
+      - name: Resolve original dependency lockfile
+        run: flutter pub get --enforce-lockfile
+      - name: Verify dependency files unchanged
+        run: git diff --exit-code -- pubspec.yaml pubspec.lock
+      - name: Targeted AR-011 format-capability tests
+        run: flutter test --no-pub test/archive_format_capability_test.dart
+      - name: Full Flutter regression tests
+        run: flutter test --no-pub
