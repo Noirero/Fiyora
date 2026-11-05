@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: mrare-beta-${{ github.ref }}
+  group: fiyora-beta-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
             echo "// Cleared to resolve redeclaration conflict with Kotlin file in same package" > "$FILE"
           fi
 
-      - name: Configure permanent Mrare signing key
+      - name: Configure permanent Fiyora signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.MRARE_KEYSTORE_BASE64 }}
           KEY_ALIAS: ${{ secrets.MRARE_KEY_ALIAS }}
@@ -45,16 +45,16 @@ jobs:
           STORE_PASSWORD: ${{ secrets.MRARE_STORE_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ] || [ -z "$STORE_PASSWORD" ]; then
-            echo "Missing Mrare signing secrets."
+            echo "Missing Fiyora signing secrets."
             exit 1
           fi
 
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/mrare-signing.jks
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/fiyora-signing.jks
           cat > android/key.properties <<EOF
           storePassword=$STORE_PASSWORD
           keyPassword=$KEY_PASSWORD
           keyAlias=$KEY_ALIAS
-          storeFile=mrare-signing.jks
+          storeFile=fiyora-signing.jks
           EOF
 
       - name: Compute monotonic beta version code
@@ -93,11 +93,11 @@ jobs:
       - name: Rename APK
         run: |
           mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
-             build/app/outputs/flutter-apk/Mrare-beta-arm64.apk
+             build/app/outputs/flutter-apk/Fiyora-Explorer-beta-arm64.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Mrare-beta-arm64-release-signed
-          path: build/app/outputs/flutter-apk/Mrare-beta-arm64.apk
+          name: Fiyora-Explorer-beta-arm64-release-signed
+          path: build/app/outputs/flutter-apk/Fiyora-Explorer-beta-arm64.apk
           if-no-files-found: error

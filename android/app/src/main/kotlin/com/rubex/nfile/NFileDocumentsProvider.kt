@@ -47,8 +47,8 @@ class NFileDocumentsProvider : DocumentsProvider() {
         row.add(DocumentsContract.Root.COLUMN_DOCUMENT_ID, getDocIdForFile(File("/storage/emulated/0")))
         row.add(DocumentsContract.Root.COLUMN_MIME_TYPES, "*/*")
         row.add(DocumentsContract.Root.COLUMN_FLAGS, flags)
-        row.add(DocumentsContract.Root.COLUMN_TITLE, "Mrare beta Storage")
-        row.add(DocumentsContract.Root.COLUMN_SUMMARY, "Internal storage via Mrare beta")
+        row.add(DocumentsContract.Root.COLUMN_TITLE, "Fiyora Explorer Beta Storage")
+        row.add(DocumentsContract.Root.COLUMN_SUMMARY, "Internal storage via Fiyora Explorer Beta")
         row.add(DocumentsContract.Root.COLUMN_ICON, android.R.drawable.sym_def_app_icon)
         
         try {
