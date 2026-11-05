@@ -1,0 +1,28 @@
+name: AR-012 temporary partial-extraction reproduction (no release)
+
+on:
+  push:
+    branches:
+      - review/ar012-extraction-rollback-repro-20261105
+
+permissions:
+  contents: read
+
+jobs:
+  ar012-repro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.44.0'
+      - name: Resolve original lockfile
+        run: flutter pub get --enforce-lockfile
+      - name: Verify dependency files unchanged
+        run: git diff --exit-code -- pubspec.yaml pubspec.lock
+      - name: Reproduce partial extraction rollback risk
+        run: flutter test --no-pub test/archive_partial_extraction_rollback_test.dart
