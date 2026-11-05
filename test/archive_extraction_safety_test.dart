@@ -32,6 +32,14 @@ void main() {
     return File(path)..writeAsBytesSync(encoded ?? (throw StateError('ZIP encoder returned no bytes')));
   }
 
+  File makeTar(String name) {
+    final payload = <int>[65, 66, 67];
+    final entries = Archive()..addFile(ArchiveFile(name, payload.length, payload));
+    final encoded = TarEncoder().encode(entries);
+    final path = p.join(fixture.path, 'input.tar');
+    return File(path)..writeAsBytesSync(encoded);
+  }
+
   Future<Map> extractInWorker(String archivePath) async {
     final messages = ReceivePort();
     Isolate? worker;
@@ -169,4 +177,46 @@ void main() {
     expect(result['status'], 'error', reason: '$result');
     expect(protected.readAsStringSync(), 'KEEP');
   });
+  test('direct ZIP refuses a path traversal payload', () async {
+    final protected = File(p.join(outside.path, 'owned.txt'))..writeAsStringSync('KEEP');
+    final archive = makeZip('../outside/owned.txt');
+    await expectLater(
+      ArchiveService.extractArchive(
+        archivePath: archive.path,
+        destinationDir: destination.path,
+      ),
+      throwsA(isA<Exception>()),
+    );
+    expect(protected.readAsStringSync(), 'KEEP');
+  });
+
+  test('background ZIP refuses a path traversal payload', () async {
+    final protected = File(p.join(outside.path, 'owned.txt'))..writeAsStringSync('KEEP');
+    final archive = makeZip('../outside/owned.txt');
+    final result = await extractInWorker(archive.path);
+    expect(result['status'], 'error', reason: '$result');
+    expect(protected.readAsStringSync(), 'KEEP');
+  });
+
+  test('direct TAR refuses a path traversal payload', () async {
+    final protected = File(p.join(outside.path, 'owned.txt'))..writeAsStringSync('KEEP');
+    final archive = makeTar('../outside/owned.txt');
+    await expectLater(
+      ArchiveService.extractArchive(
+        archivePath: archive.path,
+        destinationDir: destination.path,
+      ),
+      throwsA(isA<Exception>()),
+    );
+    expect(protected.readAsStringSync(), 'KEEP');
+  });
+
+  test('background TAR refuses a path traversal payload', () async {
+    final protected = File(p.join(outside.path, 'owned.txt'))..writeAsStringSync('KEEP');
+    final archive = makeTar('../outside/owned.txt');
+    final result = await extractInWorker(archive.path);
+    expect(result['status'], 'error', reason: '$result');
+    expect(protected.readAsStringSync(), 'KEEP');
+  });
+
 }
