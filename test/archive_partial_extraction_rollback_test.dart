@@ -179,6 +179,7 @@ void main() {
     final rollback = ArchiveExtractionRollback();
     rollback.createFile(target.path);
     target.writeAsStringSync('EXTRACTION OUTPUT');
+    rollback.noteFileWritten(target.path);
 
     target.deleteSync();
     target.writeAsStringSync('USER REPLACEMENT WITH DIFFERENT LENGTH');
@@ -207,6 +208,7 @@ void main() {
     final rollback = ArchiveExtractionRollback();
     rollback.createFile(filePath);
     File(filePath).writeAsStringSync('ORIGINAL');
+    rollback.noteFileWritten(filePath);
 
     final moved = Directory(directoryPath).renameSync(p.join(fixture.path, 'moved-original'));
     expect(File(p.join(moved.path, 'victim.txt')).existsSync(), isTrue);
@@ -225,6 +227,7 @@ void main() {
     final rollback = ArchiveExtractionRollback();
     rollback.createFile(path);
     File(path).writeAsStringSync('INCOMPLETE');
+    rollback.noteFileWritten(path);
     rollback.rollback();
     rollback.rollback();
     expect(File(path).existsSync(), isFalse);
