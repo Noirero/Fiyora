@@ -271,4 +271,38 @@ void main() {
     expect(Directory(path).existsSync(), true);
   });
 
+  test('noteFileWritten must not adopt a foreign file as owned', () {
+    final target = File(p.join(destination.path, 'replaced-between-create-and-note.txt'));
+    final rollback = ArchiveExtractionRollback();
+    rollback.createFile(target.path);
+
+    // Reproduce exactly the gap between exclusive file creation and the
+    // writer's noteFileWritten call. An external writer takes over the path.
+    target.deleteSync();
+    target.writeAsStringSync('FOREIGN OWNER DATA');
+    rollback.noteFileWritten(target.path);
+    rollback.rollback();
+
+    expect(target.readAsStringSync(), 'FOREIGN OWNER DATA');
+  });
+
+  test('a copied marker does not establish replacement directory ownership', () {
+    final path = p.join(destination.path, 'marked');
+    final rollback = ArchiveExtractionRollback();
+    rollback.createDirectory(path);
+
+    final original = Directory(path).renameSync(p.join(fixture.path, 'original-marked'));
+    final tokenMarker = original.listSync().where((x) =>
+        p.basename(x.path).startsWith('.fiyora-extract-rollback-')).single as File;
+
+    // A second actor replaces the directory at the same name and copies the
+    // original marker. This must not grant ownership over that new directory.
+    final foreign = Directory(path)..createSync();
+    File(p.join(path, p.basename(tokenMarker.path)))
+        .writeAsBytesSync(tokenMarker.readAsBytesSync());
+
+    rollback.rollback();
+    expect(foreign.existsSync(), true);
+  });
+
 }
