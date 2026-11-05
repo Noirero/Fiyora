@@ -12,6 +12,7 @@ import 'package:provider/provider.dart';
 import '../ui/widgets/background_operation_progress_dialog.dart';
 import 'archive_path_safety.dart';
 import 'archive_extraction_safety.dart';
+import 'archive_no_overwrite_safety.dart';
 
 class BackgroundOperation {
   final String id;
@@ -287,6 +288,7 @@ class BackgroundArchiveService {
         destinationPaths: [destinationPath],
         deleteSource: deleteSource,
       );
+      validateNewArchiveOutputPaths([destinationPath]);
       sendPort.send({'status': 'progress', 'progress': 0.0, 'currentFile': 'Scanning files...'});
 
       final allFiles = <_FileEntry>[];
@@ -373,8 +375,9 @@ class BackgroundArchiveService {
         destinationPaths: [destinationPath],
         deleteSource: deleteSource,
       );
+      validateNewArchiveOutputPaths([destinationPath]);
       final outFile = File(destinationPath);
-      outFile.createSync(recursive: true);
+      createArchiveOutputExclusively(outFile, recursive: true);
       outFile.writeAsBytesSync(encodedBytes);
 
       if (deleteSource) {
@@ -428,6 +431,7 @@ class BackgroundArchiveService {
         sendPort.send({'status': 'progress', 'progress': 0.1, 'currentFile': 'Opening zip...'});
         final inputStream = InputFileStream(archivePath);
         final archive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
+        validateArchiveExtractionPlan(destinationDir, archive.files);
         final totalFiles = archive.length;
         
         for (int i = 0; i < totalFiles; i++) {
@@ -440,8 +444,11 @@ class BackgroundArchiveService {
           });
 
           final filename = fileEntry.name;
-          final destPath = checkedArchiveExtractionPath(destinationDir, filename);
+          final destPath = fileEntry.isFile
+              ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
+              : checkedArchiveExtractionPath(destinationDir, filename);
           if (fileEntry.isFile) {
+            createArchiveOutputExclusively(File(destPath), recursive: true);
             final outputStream = OutputFileStream(destPath);
             fileEntry.writeContent(outputStream);
             outputStream.closeSync();
@@ -467,6 +474,7 @@ class BackgroundArchiveService {
         sendPort.send({'status': 'progress', 'progress': 0.3, 'currentFile': 'Extracting tar...'});
         final tarInputStream = InputFileStream(tempTarFile.path);
         final archive = TarDecoder().decodeBuffer(tarInputStream);
+        validateArchiveExtractionPlan(destinationDir, archive.files);
         final totalFiles = archive.length;
         
         for (int i = 0; i < totalFiles; i++) {
@@ -479,8 +487,11 @@ class BackgroundArchiveService {
           });
 
           final filename = fileEntry.name;
-          final destPath = checkedArchiveExtractionPath(destinationDir, filename);
+          final destPath = fileEntry.isFile
+              ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
+              : checkedArchiveExtractionPath(destinationDir, filename);
           if (fileEntry.isFile) {
+            createArchiveOutputExclusively(File(destPath), recursive: true);
             final outputStream = OutputFileStream(destPath);
             fileEntry.writeContent(outputStream);
             outputStream.closeSync();
@@ -501,6 +512,7 @@ class BackgroundArchiveService {
         sendPort.send({'status': 'progress', 'progress': 0.1, 'currentFile': 'Opening tar...'});
         final inputStream = InputFileStream(archivePath);
         final archive = TarDecoder().decodeBuffer(inputStream);
+        validateArchiveExtractionPlan(destinationDir, archive.files);
         final totalFiles = archive.length;
         
         for (int i = 0; i < totalFiles; i++) {
@@ -513,8 +525,11 @@ class BackgroundArchiveService {
           });
 
           final filename = fileEntry.name;
-          final destPath = checkedArchiveExtractionPath(destinationDir, filename);
+          final destPath = fileEntry.isFile
+              ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
+              : checkedArchiveExtractionPath(destinationDir, filename);
           if (fileEntry.isFile) {
+            createArchiveOutputExclusively(File(destPath), recursive: true);
             final outputStream = OutputFileStream(destPath);
             fileEntry.writeContent(outputStream);
             outputStream.closeSync();
@@ -543,32 +558,32 @@ class BackgroundArchiveService {
       } else if (lowerPath.endsWith('.gz')) {
         final decodedBytes = GZipDecoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
-        final destFile = File(checkedArchiveExtractionPath(destinationDir, name));
-        destFile.createSync(recursive: true);
+        final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
+        destFile.createSync(recursive: true, exclusive: true);
         destFile.writeAsBytesSync(decodedBytes);
         sendPort.send({'status': 'completed'});
         return;
       } else if (lowerPath.endsWith('.bz2')) {
         final decodedBytes = BZip2Decoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
-        final destFile = File(checkedArchiveExtractionPath(destinationDir, name));
-        destFile.createSync(recursive: true);
+        final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
+        destFile.createSync(recursive: true, exclusive: true);
         destFile.writeAsBytesSync(decodedBytes);
         sendPort.send({'status': 'completed'});
         return;
       } else if (lowerPath.endsWith('.lz4')) {
         final decodedBytes = lz4FrameDecode(bytes);
         final name = p.basenameWithoutExtension(archivePath);
-        final destFile = File(checkedArchiveExtractionPath(destinationDir, name));
-        destFile.createSync(recursive: true);
+        final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
+        destFile.createSync(recursive: true, exclusive: true);
         destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
         sendPort.send({'status': 'completed'});
         return;
       } else if (lowerPath.endsWith('.zst') || lowerPath.endsWith('.zstd')) {
         final decodedBytes = const ZstdDecoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
-        final destFile = File(checkedArchiveExtractionPath(destinationDir, name));
-        destFile.createSync(recursive: true);
+        final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
+        destFile.createSync(recursive: true, exclusive: true);
         destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
         sendPort.send({'status': 'completed'});
         return;
@@ -578,6 +593,7 @@ class BackgroundArchiveService {
         final inputStream = InputFileStream(archivePath);
         try {
           final zipArchive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
+          validateArchiveExtractionPlan(destinationDir, zipArchive.files);
           final totalFiles = zipArchive.length;
           
           for (int i = 0; i < totalFiles; i++) {
@@ -590,9 +606,12 @@ class BackgroundArchiveService {
             });
 
             final filename = fileEntry.name;
-            final destPath = checkedArchiveExtractionPath(destinationDir, filename);
+            final destPath = fileEntry.isFile
+              ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
+              : checkedArchiveExtractionPath(destinationDir, filename);
             if (fileEntry.isFile) {
-              final outputStream = OutputFileStream(destPath);
+              createArchiveOutputExclusively(File(destPath), recursive: true);
+            final outputStream = OutputFileStream(destPath);
               fileEntry.writeContent(outputStream);
               outputStream.closeSync();
             } else {
@@ -610,6 +629,7 @@ class BackgroundArchiveService {
 
       sendPort.send({'status': 'progress', 'progress': 0.3, 'currentFile': 'Extracting files...'});
 
+      validateArchiveExtractionPlan(destinationDir, archive.files);
       final totalFiles = archive.length;
       for (int i = 0; i < totalFiles; i++) {
         final fileEntry = archive[i];
@@ -623,8 +643,8 @@ class BackgroundArchiveService {
         final filename = fileEntry.name;
         if (fileEntry.isFile) {
           final data = fileEntry.content as List<int>;
-          final destFile = File(checkedArchiveExtractionPath(destinationDir, filename));
-          destFile.createSync(recursive: true);
+          final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, filename));
+          destFile.createSync(recursive: true, exclusive: true);
           destFile.writeAsBytesSync(data);
         } else {
           Directory(checkedArchiveExtractionPath(destinationDir, filename)).createSync(recursive: true);
