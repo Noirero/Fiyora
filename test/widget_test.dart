@@ -6,7 +6,7 @@ import 'package:nfile/providers/file_manager_provider.dart';
 import 'package:nfile/providers/media_provider.dart';
 
 void main() {
-  testWidgets('NFileApp initialization smoke test', (WidgetTester tester) async {
+  testWidgets('Fiyora Explorer initialization smoke test', (WidgetTester tester) async {
     await tester.pumpWidget(
       MultiProvider(
         providers: [
@@ -18,5 +18,6 @@ void main() {
     );
 
     expect(find.byType(MaterialApp), findsOneWidget);
+    expect(tester.widget<MaterialApp>(find.byType(MaterialApp)).title, 'Fiyora Explorer');
   });
 }
