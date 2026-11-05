@@ -5,6 +5,7 @@ import 'package:archive/archive_io.dart';
 import 'package:dart_lz4/dart_lz4.dart';
 import 'package:just_zstd/just_zstd.dart';
 import 'archive_path_safety.dart';
+import 'archive_extraction_safety.dart';
 
 class ArchiveService {
   /// Creates an archive or multiple separate archives.
@@ -224,7 +225,7 @@ class ArchiveService {
         
         for (final fileEntry in archive.files) {
           final filename = fileEntry.name;
-          final destPath = p.join(destinationDir, filename);
+          final destPath = checkedArchiveExtractionPath(destinationDir, filename);
           if (fileEntry.isFile) {
             final outputStream = OutputFileStream(destPath);
             fileEntry.writeContent(outputStream);
@@ -250,7 +251,7 @@ class ArchiveService {
         final archive = TarDecoder().decodeBuffer(tarInputStream);
         for (final fileEntry in archive.files) {
           final filename = fileEntry.name;
-          final destPath = p.join(destinationDir, filename);
+          final destPath = checkedArchiveExtractionPath(destinationDir, filename);
           if (fileEntry.isFile) {
             final outputStream = OutputFileStream(destPath);
             fileEntry.writeContent(outputStream);
@@ -272,7 +273,7 @@ class ArchiveService {
         final archive = TarDecoder().decodeBuffer(inputStream);
         for (final fileEntry in archive.files) {
           final filename = fileEntry.name;
-          final destPath = p.join(destinationDir, filename);
+          final destPath = checkedArchiveExtractionPath(destinationDir, filename);
           if (fileEntry.isFile) {
             final outputStream = OutputFileStream(destPath);
             fileEntry.writeContent(outputStream);
@@ -300,28 +301,28 @@ class ArchiveService {
       } else if (lowerPath.endsWith('.gz')) {
         final decodedBytes = GZipDecoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
-        final destFile = File(p.join(destinationDir, name));
+        final destFile = File(checkedArchiveExtractionPath(destinationDir, name));
         destFile.createSync(recursive: true);
         destFile.writeAsBytesSync(decodedBytes);
         return;
       } else if (lowerPath.endsWith('.bz2')) {
         final decodedBytes = BZip2Decoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
-        final destFile = File(p.join(destinationDir, name));
+        final destFile = File(checkedArchiveExtractionPath(destinationDir, name));
         destFile.createSync(recursive: true);
         destFile.writeAsBytesSync(decodedBytes);
         return;
       } else if (lowerPath.endsWith('.lz4')) {
         final decodedBytes = lz4FrameDecode(bytes);
         final name = p.basenameWithoutExtension(archivePath);
-        final destFile = File(p.join(destinationDir, name));
+        final destFile = File(checkedArchiveExtractionPath(destinationDir, name));
         destFile.createSync(recursive: true);
         destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
         return;
       } else if (lowerPath.endsWith('.zst') || lowerPath.endsWith('.zstd')) {
         final decodedBytes = const ZstdDecoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
-        final destFile = File(p.join(destinationDir, name));
+        final destFile = File(checkedArchiveExtractionPath(destinationDir, name));
         destFile.createSync(recursive: true);
         destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
         return;
@@ -332,7 +333,7 @@ class ArchiveService {
           final zipArchive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
           for (final fileEntry in zipArchive.files) {
             final filename = fileEntry.name;
-            final destPath = p.join(destinationDir, filename);
+            final destPath = checkedArchiveExtractionPath(destinationDir, filename);
             if (fileEntry.isFile) {
               final outputStream = OutputFileStream(destPath);
               fileEntry.writeContent(outputStream);
@@ -353,11 +354,11 @@ class ArchiveService {
         final filename = fileEntry.name;
         if (fileEntry.isFile) {
           final data = fileEntry.content as List<int>;
-          final destFile = File(p.join(destinationDir, filename));
+          final destFile = File(checkedArchiveExtractionPath(destinationDir, filename));
           destFile.createSync(recursive: true);
           destFile.writeAsBytesSync(data);
         } else {
-          Directory(p.join(destinationDir, filename)).createSync(recursive: true);
+          Directory(checkedArchiveExtractionPath(destinationDir, filename)).createSync(recursive: true);
         }
       }
     } finally {

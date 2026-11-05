@@ -11,6 +11,7 @@ import '../providers/file_manager_provider.dart';
 import 'package:provider/provider.dart';
 import '../ui/widgets/background_operation_progress_dialog.dart';
 import 'archive_path_safety.dart';
+import 'archive_extraction_safety.dart';
 
 class BackgroundOperation {
   final String id;
@@ -137,7 +138,7 @@ class BackgroundArchiveService {
     _receivePort = ReceivePort();
 
     _activeIsolate = await Isolate.spawn(
-      _extractIsolateTask,
+      extractIsolateTask,
       {
         'sendPort': _receivePort!.sendPort,
         'archivePath': archivePath,
@@ -398,7 +399,8 @@ class BackgroundArchiveService {
     }
   }
 
-  static void _extractIsolateTask(Map<String, dynamic> args) async {
+  @visibleForTesting
+  static Future<void> extractIsolateTask(Map<String, dynamic> args) async {
     final sendPort = args['sendPort'] as SendPort;
     final archivePath = args['archivePath'] as String;
     final destinationDir = args['destinationDir'] as String;
@@ -431,7 +433,7 @@ class BackgroundArchiveService {
           });
 
           final filename = fileEntry.name;
-          final destPath = p.join(destinationDir, filename);
+          final destPath = checkedArchiveExtractionPath(destinationDir, filename);
           if (fileEntry.isFile) {
             final outputStream = OutputFileStream(destPath);
             fileEntry.writeContent(outputStream);
@@ -470,7 +472,7 @@ class BackgroundArchiveService {
           });
 
           final filename = fileEntry.name;
-          final destPath = p.join(destinationDir, filename);
+          final destPath = checkedArchiveExtractionPath(destinationDir, filename);
           if (fileEntry.isFile) {
             final outputStream = OutputFileStream(destPath);
             fileEntry.writeContent(outputStream);
@@ -504,7 +506,7 @@ class BackgroundArchiveService {
           });
 
           final filename = fileEntry.name;
-          final destPath = p.join(destinationDir, filename);
+          final destPath = checkedArchiveExtractionPath(destinationDir, filename);
           if (fileEntry.isFile) {
             final outputStream = OutputFileStream(destPath);
             fileEntry.writeContent(outputStream);
@@ -534,7 +536,7 @@ class BackgroundArchiveService {
       } else if (lowerPath.endsWith('.gz')) {
         final decodedBytes = GZipDecoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
-        final destFile = File(p.join(destinationDir, name));
+        final destFile = File(checkedArchiveExtractionPath(destinationDir, name));
         destFile.createSync(recursive: true);
         destFile.writeAsBytesSync(decodedBytes);
         sendPort.send({'status': 'completed'});
@@ -542,7 +544,7 @@ class BackgroundArchiveService {
       } else if (lowerPath.endsWith('.bz2')) {
         final decodedBytes = BZip2Decoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
-        final destFile = File(p.join(destinationDir, name));
+        final destFile = File(checkedArchiveExtractionPath(destinationDir, name));
         destFile.createSync(recursive: true);
         destFile.writeAsBytesSync(decodedBytes);
         sendPort.send({'status': 'completed'});
@@ -550,7 +552,7 @@ class BackgroundArchiveService {
       } else if (lowerPath.endsWith('.lz4')) {
         final decodedBytes = lz4FrameDecode(bytes);
         final name = p.basenameWithoutExtension(archivePath);
-        final destFile = File(p.join(destinationDir, name));
+        final destFile = File(checkedArchiveExtractionPath(destinationDir, name));
         destFile.createSync(recursive: true);
         destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
         sendPort.send({'status': 'completed'});
@@ -558,7 +560,7 @@ class BackgroundArchiveService {
       } else if (lowerPath.endsWith('.zst') || lowerPath.endsWith('.zstd')) {
         final decodedBytes = const ZstdDecoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
-        final destFile = File(p.join(destinationDir, name));
+        final destFile = File(checkedArchiveExtractionPath(destinationDir, name));
         destFile.createSync(recursive: true);
         destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
         sendPort.send({'status': 'completed'});
@@ -581,7 +583,7 @@ class BackgroundArchiveService {
             });
 
             final filename = fileEntry.name;
-            final destPath = p.join(destinationDir, filename);
+            final destPath = checkedArchiveExtractionPath(destinationDir, filename);
             if (fileEntry.isFile) {
               final outputStream = OutputFileStream(destPath);
               fileEntry.writeContent(outputStream);
@@ -614,11 +616,11 @@ class BackgroundArchiveService {
         final filename = fileEntry.name;
         if (fileEntry.isFile) {
           final data = fileEntry.content as List<int>;
-          final destFile = File(p.join(destinationDir, filename));
+          final destFile = File(checkedArchiveExtractionPath(destinationDir, filename));
           destFile.createSync(recursive: true);
           destFile.writeAsBytesSync(data);
         } else {
-          Directory(p.join(destinationDir, filename)).createSync(recursive: true);
+          Directory(checkedArchiveExtractionPath(destinationDir, filename)).createSync(recursive: true);
         }
       }
 
