@@ -1,0 +1,30 @@
+name: AR-010 temporary routing validation (no release)
+
+on:
+  push:
+    branches:
+      - review/ar010-honor-split-separate-options-20261105
+
+permissions:
+  contents: read
+
+jobs:
+  ar010-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.44.0'
+      - name: Resolve original lockfile
+        run: flutter pub get --enforce-lockfile
+      - name: Verify dependency pins unchanged
+        run: git diff --exit-code -- pubspec.yaml pubspec.lock
+      - name: Targeted AR-010 routing tests
+        run: flutter test --no-pub test/archive_compression_routing_test.dart
+      - name: Full Flutter tests
+        run: flutter test --no-pub

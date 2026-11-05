@@ -2653,6 +2653,17 @@ class FileManagerProvider extends ChangeNotifier {
     }
   }
 
+  @visibleForTesting
+  static bool shouldUseBackgroundArchiveCreation({
+    required bool hasContext,
+    required bool separateArchives,
+    int? splitSizeMB,
+  }) {
+    return hasContext &&
+        !separateArchives &&
+        (splitSizeMB == null || splitSizeMB <= 0);
+  }
+
   Future<void> createArchive({
     required String archiveName,
     required String format,
@@ -2686,7 +2697,13 @@ class FileManagerProvider extends ChangeNotifier {
     activeTab.isLoading = true;
     notifyListeners();
 
-    if (context != null) {
+    // The background worker does not support split or separate outputs.
+    // Use the existing ArchiveService implementation for these options.
+    if (shouldUseBackgroundArchiveCreation(
+      hasContext: context != null,
+      separateArchives: separateArchives,
+      splitSizeMB: splitSizeMB,
+    )) {
       selectedPaths.clear();
       final destinationPath = p.join(currentPath, '$archiveName.$format');
       await BackgroundArchiveService.instance.startCompression(
