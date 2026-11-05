@@ -5,6 +5,7 @@ import 'dart:isolate';
 import 'package:archive/archive_io.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nfile/services/archive_service.dart';
+import 'package:nfile/services/archive_extraction_rollback.dart';
 import 'package:nfile/services/background_archive_service.dart';
 import 'package:path/path.dart' as p;
 
@@ -171,6 +172,68 @@ void main() {
     expect(result['status'], 'error', reason: '$result');
     expect(Directory(p.join(destination.path, 'created')).existsSync(), false);
     expect(blocked.existsSync(), true, reason: 'Existing directory must remain');
+  });
+
+  test('rollback must not delete a different file replacing a recorded path', () {
+    final target = File(p.join(destination.path, 'owned.txt'));
+    final rollback = ArchiveExtractionRollback();
+    rollback.createFile(target.path);
+    target.writeAsStringSync('EXTRACTION OUTPUT');
+
+    target.deleteSync();
+    target.writeAsStringSync('USER REPLACEMENT WITH DIFFERENT LENGTH');
+    rollback.rollback();
+
+    expect(target.readAsStringSync(), 'USER REPLACEMENT WITH DIFFERENT LENGTH');
+  });
+
+  test('rollback must not delete a replacement directory', () {
+    final path = p.join(destination.path, 'temporary');
+    final rollback = ArchiveExtractionRollback();
+    rollback.createDirectory(path);
+    Directory(path).deleteSync();
+
+    // Another actor creates a directory with the same pathname.
+    final replacement = Directory(path)..createSync();
+    rollback.rollback();
+
+    expect(replacement.existsSync(), isTrue);
+  });
+
+  test('rollback must not follow a newly substituted symlink parent', () {
+    if (!Platform.isLinux) return;
+    final directoryPath = p.join(destination.path, 'staged-parent');
+    final filePath = p.join(directoryPath, 'victim.txt');
+    final rollback = ArchiveExtractionRollback();
+    rollback.createFile(filePath);
+    File(filePath).writeAsStringSync('ORIGINAL');
+
+    final moved = Directory(directoryPath).renameSync(p.join(fixture.path, 'moved-original'));
+    expect(File(p.join(moved.path, 'victim.txt')).existsSync(), isTrue);
+
+    final outside = Directory(p.join(fixture.path, 'outside'))..createSync();
+    final protected = File(p.join(outside.path, 'victim.txt'))
+      ..writeAsStringSync('USER FILE OUTSIDE DESTINATION');
+    Link(directoryPath).createSync(outside.path);
+    rollback.rollback();
+
+    expect(protected.readAsStringSync(), 'USER FILE OUTSIDE DESTINATION');
+  });
+
+  test('ordinary rollback remains idempotent and permits retry', () {
+    final path = p.join(destination.path, 'retry', 'generated.txt');
+    final rollback = ArchiveExtractionRollback();
+    rollback.createFile(path);
+    File(path).writeAsStringSync('INCOMPLETE');
+    rollback.rollback();
+    rollback.rollback();
+    expect(File(path).existsSync(), isFalse);
+    expect(Directory(p.join(destination.path, 'retry')).existsSync(), isFalse);
+
+    final next = ArchiveExtractionRollback();
+    next.createFile(path);
+    File(path).writeAsStringSync('RETRY OK');
+    expect(File(path).readAsStringSync(), 'RETRY OK');
   });
 
 }
