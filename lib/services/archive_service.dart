@@ -9,6 +9,7 @@ import 'archive_atomic_write.dart';
 import 'archive_extraction_safety.dart';
 import 'archive_format_support.dart';
 import 'archive_no_overwrite_safety.dart';
+import 'archive_extraction_rollback.dart';
 
 class ArchiveService {
   /// Creates an archive or multiple separate archives.
@@ -208,6 +209,7 @@ class ArchiveService {
     final password = args['password'] as String?;
 
     File? tempCombinedFile;
+    final rollback = ArchiveExtractionRollback();
 
     try {
       ArchiveFormatSupport.requireExtractable(archivePath);
@@ -245,12 +247,15 @@ class ArchiveService {
               ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
               : checkedArchiveExtractionPath(destinationDir, filename);
           if (fileEntry.isFile) {
-            createArchiveOutputExclusively(File(destPath), recursive: true);
+            rollback.createFile(destPath);
             final outputStream = OutputFileStream(destPath);
-            fileEntry.writeContent(outputStream);
-            outputStream.closeSync();
+            try {
+              fileEntry.writeContent(outputStream);
+            } finally {
+              outputStream.closeSync();
+            }
           } else {
-            Directory(destPath).createSync(recursive: true);
+            rollback.createDirectory(destPath);
           }
         }
         inputStream.closeSync();
@@ -275,12 +280,15 @@ class ArchiveService {
               ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
               : checkedArchiveExtractionPath(destinationDir, filename);
           if (fileEntry.isFile) {
-            createArchiveOutputExclusively(File(destPath), recursive: true);
+            rollback.createFile(destPath);
             final outputStream = OutputFileStream(destPath);
-            fileEntry.writeContent(outputStream);
-            outputStream.closeSync();
+            try {
+              fileEntry.writeContent(outputStream);
+            } finally {
+              outputStream.closeSync();
+            }
           } else {
-            Directory(destPath).createSync(recursive: true);
+            rollback.createDirectory(destPath);
           }
         }
         tarInputStream.closeSync();
@@ -301,12 +309,15 @@ class ArchiveService {
               ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
               : checkedArchiveExtractionPath(destinationDir, filename);
           if (fileEntry.isFile) {
-            createArchiveOutputExclusively(File(destPath), recursive: true);
+            rollback.createFile(destPath);
             final outputStream = OutputFileStream(destPath);
-            fileEntry.writeContent(outputStream);
-            outputStream.closeSync();
+            try {
+              fileEntry.writeContent(outputStream);
+            } finally {
+              outputStream.closeSync();
+            }
           } else {
-            Directory(destPath).createSync(recursive: true);
+            rollback.createDirectory(destPath);
           }
         }
         inputStream.closeSync();
@@ -329,28 +340,28 @@ class ArchiveService {
         final decodedBytes = GZipDecoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
-        destFile.createSync(recursive: true, exclusive: true);
+        rollback.createFile(destFile.path);
         destFile.writeAsBytesSync(decodedBytes);
         return;
       } else if (lowerPath.endsWith('.bz2')) {
         final decodedBytes = BZip2Decoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
-        destFile.createSync(recursive: true, exclusive: true);
+        rollback.createFile(destFile.path);
         destFile.writeAsBytesSync(decodedBytes);
         return;
       } else if (lowerPath.endsWith('.lz4')) {
         final decodedBytes = lz4FrameDecode(bytes);
         final name = p.basenameWithoutExtension(archivePath);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
-        destFile.createSync(recursive: true, exclusive: true);
+        rollback.createFile(destFile.path);
         destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
         return;
       } else if (lowerPath.endsWith('.zst') || lowerPath.endsWith('.zstd')) {
         final decodedBytes = const ZstdDecoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
-        destFile.createSync(recursive: true, exclusive: true);
+        rollback.createFile(destFile.path);
         destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
         return;
       } else {
@@ -365,12 +376,15 @@ class ArchiveService {
               ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
               : checkedArchiveExtractionPath(destinationDir, filename);
             if (fileEntry.isFile) {
-              createArchiveOutputExclusively(File(destPath), recursive: true);
+              rollback.createFile(destPath);
               final outputStream = OutputFileStream(destPath);
-              fileEntry.writeContent(outputStream);
-              outputStream.closeSync();
+              try {
+                fileEntry.writeContent(outputStream);
+              } finally {
+                outputStream.closeSync();
+              }
             } else {
-              Directory(destPath).createSync(recursive: true);
+              rollback.createDirectory(destPath);
             }
           }
           inputStream.closeSync();
@@ -387,12 +401,15 @@ class ArchiveService {
         if (fileEntry.isFile) {
           final data = fileEntry.content as List<int>;
           final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, filename));
-          destFile.createSync(recursive: true, exclusive: true);
+          rollback.createFile(destFile.path);
           destFile.writeAsBytesSync(data);
         } else {
-          Directory(checkedArchiveExtractionPath(destinationDir, filename)).createSync(recursive: true);
+          rollback.createDirectory(checkedArchiveExtractionPath(destinationDir, filename));
         }
       }
+    } catch (e) {
+      rollback.rollback();
+      rethrow;
     } finally {
       if (tempCombinedFile != null && tempCombinedFile.existsSync()) {
         try {
