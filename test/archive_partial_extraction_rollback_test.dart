@@ -121,4 +121,56 @@ void main() {
     );
     expect(preserved.readAsStringSync(), 'KEEP');
   });
+  test('direct ZIP extraction succeeds with ordinary nested outputs', () async {
+    final input = makeArchive('zip');
+    await ArchiveService.extractArchive(
+      archivePath: input.path,
+      destinationDir: destination.path,
+    );
+    expect(File(p.join(destination.path, 'first.txt')).readAsStringSync(), 'FIRST');
+    expect(File(p.join(destination.path, 'blocked/second.txt')).readAsStringSync(), 'SECOND');
+  });
+
+  test('background TAR extraction succeeds with ordinary nested outputs', () async {
+    final input = makeArchive('tar');
+    final result = await extractInWorker(input.path);
+    expect(result['status'], 'completed', reason: '$result');
+    expect(File(p.join(destination.path, 'first.txt')).readAsStringSync(), 'FIRST');
+    expect(File(p.join(destination.path, 'blocked/second.txt')).readAsStringSync(), 'SECOND');
+  });
+
+  File makeNestedArchive(String format) {
+    final entries = Archive()
+      ..addFile(ArchiveFile('created/sub/first.txt', 5, utf8.encode('FIRST')))
+      ..addFile(ArchiveFile('blocked/second.txt', 6, utf8.encode('SECOND')));
+    final bytes = format == 'zip'
+        ? (ZipEncoder().encode(entries) ??
+            (throw StateError('ZIP fixture failed')))
+        : TarEncoder().encode(entries);
+    return File(p.join(fixture.path, 'nested.$format'))..writeAsBytesSync(bytes);
+  }
+
+  test('direct ZIP failure removes nested staging directories', () async {
+    final input = makeNestedArchive('zip');
+    denySecondOutputWrites();
+    await expectLater(
+      ArchiveService.extractArchive(
+        archivePath: input.path,
+        destinationDir: destination.path,
+      ),
+      throwsA(anything),
+    );
+    expect(Directory(p.join(destination.path, 'created')).existsSync(), false);
+    expect(blocked.existsSync(), true, reason: 'Existing directory must remain');
+  });
+
+  test('background TAR failure removes nested staging directories', () async {
+    final input = makeNestedArchive('tar');
+    denySecondOutputWrites();
+    final result = await extractInWorker(input.path);
+    expect(result['status'], 'error', reason: '$result');
+    expect(Directory(p.join(destination.path, 'created')).existsSync(), false);
+    expect(blocked.existsSync(), true, reason: 'Existing directory must remain');
+  });
+
 }
