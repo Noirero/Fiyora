@@ -1,4 +1,4 @@
-name: beta (Fiyora preview)
+name: beta — Fiyora Beta (manual)
 
 # Workflow exists on default branch, but sources the preview app from apk-beta.
 on:
@@ -19,6 +19,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Enforce manual dispatch from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
       - name: Checkout tested preview source
         uses: actions/checkout@v4
         with:
@@ -114,6 +120,18 @@ jobs:
           name: fiyora-beta-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist/
           if-no-files-found: error
+
+      - name: Ensure beta branch still matches the built source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CURRENT_BETA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/apk-beta" --jq .object.sha)"
+          test "$CURRENT_BETA" = "$SOURCE_SHA" || {
+            echo 'apk-beta changed during the build; refusing to publish a stale preview.'
+            exit 1
+          }
 
       - name: Publish beta GitHub prerelease
         uses: softprops/action-gh-release@v2

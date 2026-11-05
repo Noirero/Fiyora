@@ -1,4 +1,4 @@
-name: release (Fiyora stable candidate)
+name: main — Fiyora Stable (manual)
 
 # Manual, audited promotion. Never automatically publishes main on push.
 on:
@@ -6,10 +6,6 @@ on:
     inputs:
       tested_beta_tag:
         description: 'Existing Fiyora beta prerelease tag that passed device testing'
-        required: true
-        type: string
-      tested_beta_ci_run_id:
-        description: 'Successful apk-beta CI run ID for the exact tested source commit'
         required: true
         type: string
       device_test_approved:
@@ -34,6 +30,12 @@ jobs:
       contents: write
       actions: read
     steps:
+      - name: Enforce manual dispatch from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
       - name: Confirm physical beta test attestation
         shell: bash
         env:
@@ -53,12 +55,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TESTED_BETA_TAG: ${{ inputs.tested_beta_tag }}
-          BETA_CI_RUN_ID: ${{ inputs.tested_beta_ci_run_id }}
         run: |
           set -euo pipefail
           # Avoid tag-name option injection, path manipulation or unrelated releases.
-          [[ "$TESTED_BETA_TAG" =~ ^fiyora-beta-v[0-9]+\.[0-9]+\.[0-9]+-r[0-9]+-a[0-9]+$ ]]
-          [[ "$BETA_CI_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$TESTED_BETA_TAG" =~ ^fiyora-beta-v[0-9]+\.[0-9]+\.[0-9]+-r([0-9]+)-a([0-9]+)$ ]] || {
+            echo 'Unexpected beta tag syntax.'
+            exit 1
+          }
+          BETA_RUN_ID="${BASH_REMATCH[1]}"
+          BETA_RUN_ATTEMPT="${BASH_REMATCH[2]}"
           MAIN_SHA="$(git rev-parse HEAD)"
           test "$MAIN_SHA" = "$GITHUB_SHA" || { echo 'Dispatch SHA mismatch'; exit 1; }
           CURRENT_MAIN="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
@@ -69,11 +74,16 @@ jobs:
           git fetch --no-tags origin "refs/tags/${TESTED_BETA_TAG}:refs/tags/${TESTED_BETA_TAG}"
           BETA_SHA="$(git rev-parse "${TESTED_BETA_TAG}^{commit}")"
 
-          CI_RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${BETA_CI_RUN_ID}")"
-          echo "$CI_RUN" | jq -e --arg sha "$BETA_SHA" '
-            .head_branch == "apk-beta" and .head_sha == $sha and
+          # The manual beta workflow runs from main and checks out apk-beta.
+          # Confirm prerelease describes the tagged source and the originating manual run.
+          echo "$RELEASE" | jq -e --arg sha "$BETA_SHA" '
+            (.body | contains("Source commit: `" + $sha + "`"))' >/dev/null
+          CI_RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${BETA_RUN_ID}/attempts/${BETA_RUN_ATTEMPT}")"
+          echo "$CI_RUN" | jq -e '
+            .event == "workflow_dispatch" and
+            .head_branch == "main" and
             .conclusion == "success" and
-            .path == ".github/workflows/apk-build.yml"' >/dev/null
+            .path == ".github/workflows/beta.yml"' >/dev/null
 
           git merge-base --is-ancestor "$BETA_SHA" "$MAIN_SHA" || {
             echo 'Tested beta commit is not an ancestor of main. Promote with a merge commit (not squash), then retest/approve as appropriate.'
@@ -91,6 +101,7 @@ jobs:
           fi
           echo "SOURCE_SHA=$MAIN_SHA" >> "$GITHUB_ENV"
           echo "BETA_SHA=$BETA_SHA" >> "$GITHUB_ENV"
+          echo "BETA_RUN_ID=$BETA_RUN_ID" >> "$GITHUB_ENV"
           echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
 
@@ -192,7 +203,7 @@ jobs:
             Stable source on `main`: `${{ env.SOURCE_SHA }}`
             Previously tested beta source: `${{ env.BETA_SHA }}`
             Previously tested beta prerelease: `${{ inputs.tested_beta_tag }}`
-            Successful beta CI: `${{ inputs.tested_beta_ci_run_id }}`
+            Successful manually-triggered beta run: `${{ env.BETA_RUN_ID }}`
             Beta physical test attested by manual workflow operator.
             **Note:** Stable binaries differ from preview binaries (package ID and signing key). Verify the final signed candidate on a physical device before publication.
           files: dist/*

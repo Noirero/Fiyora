@@ -1,4 +1,4 @@
-name: apk-build (NFile Original)
+name: apk-build — NFile Original (manual)
 
 # Only the workflow lives on main. The source is an immutable, audited NFile snapshot.
 on:
@@ -21,6 +21,12 @@ jobs:
     env:
       ORIGINAL_SHA: 00dcc955bbb0af0c0b0d963f644e6980d1ed67e5
     steps:
+      - name: Enforce manual dispatch from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
       - name: Confirm original branch has not moved
         shell: bash
         env:
