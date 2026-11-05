@@ -1,0 +1,30 @@
+name: AR-004 temporary transactional validation (no release)
+
+on:
+  push:
+    branches:
+      - review/ar004-transactional-archive-write-20261105
+
+permissions:
+  contents: read
+
+jobs:
+  ar004-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.44.0'
+      - name: Resolve original lockfile
+        run: flutter pub get --enforce-lockfile
+      - name: Verify dependency lockfile unchanged
+        run: git diff --exit-code -- pubspec.yaml pubspec.lock
+      - name: Targeted AR-004 fault-injection tests
+        run: flutter test --no-pub test/archive_atomic_write_test.dart
+      - name: Full Flutter regression suite
+        run: flutter test --no-pub
