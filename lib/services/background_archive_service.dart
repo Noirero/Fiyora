@@ -62,6 +62,7 @@ class BackgroundArchiveService {
     required String destinationPath,
     required String format,
     required int level,
+    String? password,
     required bool deleteSource,
   }) async {
     final archiveName = p.basename(destinationPath);
@@ -87,6 +88,7 @@ class BackgroundArchiveService {
         'destinationPath': destinationPath,
         'format': format,
         'level': level,
+        'password': password,
         'deleteSource': deleteSource,
       },
     );
@@ -273,9 +275,13 @@ class BackgroundArchiveService {
     final destinationPath = args['destinationPath'] as String;
     final format = args['format'] as String;
     final level = args['level'] as int;
+    final password = args['password'] as String?;
     final deleteSource = args['deleteSource'] as bool;
 
     try {
+      if (password != null && password.isNotEmpty && format != 'zip') {
+        throw ArgumentError.value(format, 'format', 'Password protection is only supported for ZIP');
+      }
       validateArchiveDestinations(
         sourcePaths: sourcePaths,
         destinationPaths: [destinationPath],
@@ -329,7 +335,8 @@ class BackgroundArchiveService {
 
       List<int>? encodedBytes;
       if (format == 'zip') {
-        encodedBytes = ZipEncoder().encode(archive, level: level);
+        encodedBytes = ZipEncoder(password: password?.isNotEmpty == true ? password : null)
+            .encode(archive, level: level);
       } else if (format == 'tar') {
         encodedBytes = TarEncoder().encode(archive);
       } else if (format == 'tar.gz') {
