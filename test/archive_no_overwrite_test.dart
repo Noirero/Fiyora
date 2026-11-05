@@ -5,6 +5,7 @@ import 'dart:isolate';
 import 'package:archive/archive_io.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nfile/services/archive_service.dart';
+import 'package:nfile/services/archive_no_overwrite_safety.dart';
 import 'package:nfile/services/background_archive_service.dart';
 import 'package:path/path.dart' as p;
 
@@ -166,17 +167,14 @@ void main() {
     expect(File(p.join(destination.path, 'first.txt')).existsSync(), isFalse);
   });
 
-  test('duplicate file entries fail before extraction begins', () async {
-    final archive = zip('duplicate.zip', [
+  test('preflight rejects duplicate decoded entries', () {
+    final decodedEntries = <ArchiveFile>[
       ArchiveFile('same.txt', 1, utf8.encode('A')),
       ArchiveFile('same.txt', 1, utf8.encode('B')),
-    ]);
-    await expectLater(
-      ArchiveService.extractArchive(
-        archivePath: archive.path,
-        destinationDir: destination.path,
-      ),
-      throwsA(isA<Exception>()),
+    ];
+    expect(
+      () => validateArchiveExtractionPlan(destination.path, decodedEntries),
+      throwsA(isA<FileSystemException>()),
     );
     expect(File(p.join(destination.path, 'same.txt')).existsSync(), isFalse);
   });

@@ -363,7 +363,7 @@ class ArchiveService {
               : checkedArchiveExtractionPath(destinationDir, filename);
             if (fileEntry.isFile) {
               createArchiveOutputExclusively(File(destPath), recursive: true);
-            final outputStream = OutputFileStream(destPath);
+              final outputStream = OutputFileStream(destPath);
               fileEntry.writeContent(outputStream);
               outputStream.closeSync();
             } else {
