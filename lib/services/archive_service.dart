@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import 'package:archive/archive_io.dart';
 import 'package:dart_lz4/dart_lz4.dart';
 import 'package:just_zstd/just_zstd.dart';
+import 'archive_path_safety.dart';
 
 class ArchiveService {
   /// Creates an archive or multiple separate archives.
@@ -18,19 +19,47 @@ class ArchiveService {
     required bool deleteSource,
     required bool separateArchives,
   }) async {
+    final destinations = separateArchives
+        ? sourcePaths
+            .map((path) => p.join(destinationDir, '${p.basenameWithoutExtension(path)}.$format'))
+            .toList()
+        : [p.join(destinationDir, '$archiveName.$format')];
+    validateArchiveDestinations(
+      sourcePaths: sourcePaths,
+      destinationPaths: destinations,
+      deleteSource: deleteSource,
+    );
     if (separateArchives) {
       for (final path in sourcePaths) {
         final name = p.basenameWithoutExtension(path);
         final fullDest = p.join(destinationDir, '$name.$format');
-        await _createSingleArchive([path], fullDest, format, compressionLevel, password, splitSizeMB);
+        await _createSingleArchive(
+          [path], fullDest, format, compressionLevel, password, splitSizeMB,
+          deleteSource: deleteSource,
+          safetySourcePaths: sourcePaths,
+        );
         if (deleteSource) {
+          validateArchiveDestinations(
+            sourcePaths: sourcePaths,
+            destinationPaths: destinations,
+            deleteSource: true,
+          );
           await _deleteEntity(path);
         }
       }
     } else {
       final fullDest = p.join(destinationDir, '$archiveName.$format');
-      await _createSingleArchive(sourcePaths, fullDest, format, compressionLevel, password, splitSizeMB);
+      await _createSingleArchive(
+        sourcePaths, fullDest, format, compressionLevel, password, splitSizeMB,
+        deleteSource: deleteSource,
+        safetySourcePaths: sourcePaths,
+      );
       if (deleteSource) {
+        validateArchiveDestinations(
+          sourcePaths: sourcePaths,
+          destinationPaths: destinations,
+          deleteSource: true,
+        );
         for (final path in sourcePaths) {
           await _deleteEntity(path);
         }
@@ -44,8 +73,10 @@ class ArchiveService {
     String format,
     int level,
     String? password,
-    int? splitSizeMB,
-  ) async {
+    int? splitSizeMB, {
+    required bool deleteSource,
+    required List<String> safetySourcePaths,
+  }) async {
     return compute(_encodeArchiveTask, {
       'sourcePaths': sourcePaths,
       'destinationPath': destinationPath,
@@ -53,6 +84,8 @@ class ArchiveService {
       'level': level,
       'password': password,
       'splitSizeMB': splitSizeMB,
+      'deleteSource': deleteSource,
+      'safetySourcePaths': safetySourcePaths,
     });
   }
 
@@ -62,6 +95,8 @@ class ArchiveService {
     final format = args['format'] as String;
     final level = args['level'] as int;
     final splitSizeMB = args['splitSizeMB'] as int?;
+    final deleteSource = args['deleteSource'] as bool;
+    final safetySourcePaths = args['safetySourcePaths'] as List<String>;
 
     final archive = Archive();
 
@@ -106,6 +141,18 @@ class ArchiveService {
     }
 
     if (encodedBytes != null) {
+      final destinations = [destinationPath];
+      if (splitSizeMB != null && splitSizeMB > 0 && encodedBytes.length > splitSizeMB * 1024 * 1024) {
+        final count = (encodedBytes.length / (splitSizeMB * 1024 * 1024)).ceil();
+        for (var part = 1; part <= count; part++) {
+          destinations.add('$destinationPath.${part.toString().padLeft(3, '0')}');
+        }
+      }
+      validateArchiveDestinations(
+        sourcePaths: safetySourcePaths,
+        destinationPaths: destinations,
+        deleteSource: deleteSource,
+      );
       final outFile = File(destinationPath);
       outFile.writeAsBytesSync(encodedBytes);
 

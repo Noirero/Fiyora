@@ -1,0 +1,31 @@
+name: AR-001 temporary validation (no release)
+
+on:
+  push:
+    branches:
+      - review/ar001-ci-validation-20261105
+
+permissions:
+  contents: read
+
+jobs:
+  ar001-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout isolated validation branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Resolve locked dependencies
+        run: flutter pub get --enforce-lockfile
+      - name: Verify original lockfile remains unchanged
+        run: git diff --exit-code -- pubspec.yaml pubspec.lock
+      - name: AR-001 targeted regression
+        run: flutter test --no-pub test/archive_source_destination_safety_test.dart
+      - name: Full Flutter regression suite
+        run: flutter test --no-pub
