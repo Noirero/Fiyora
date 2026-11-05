@@ -479,8 +479,10 @@ class ArchiveService {
           } else {
             archive = ZipDecoder().decodeBytes(bytes);
           }
-        } catch (_) {
-          archive = Archive();
+        } catch (e) {
+          // Never replace an existing archive with an empty one after a decode failure.
+          debugPrint('Could not decode existing archive for add: $e');
+          return false;
         }
       }
 
