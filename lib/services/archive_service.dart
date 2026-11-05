@@ -7,6 +7,7 @@ import 'package:just_zstd/just_zstd.dart';
 import 'archive_path_safety.dart';
 import 'archive_atomic_write.dart';
 import 'archive_extraction_safety.dart';
+import 'archive_format_support.dart';
 import 'archive_no_overwrite_safety.dart';
 
 class ArchiveService {
@@ -209,6 +210,8 @@ class ArchiveService {
     File? tempCombinedFile;
 
     try {
+      ArchiveFormatSupport.requireExtractable(archivePath);
+
       // Check for multi-volume archive (.001)
       if (archivePath.endsWith('.001')) {
         final baseName = archivePath.substring(0, archivePath.length - 4);
@@ -419,6 +422,9 @@ class ArchiveService {
     final password = args['password'] as String?;
 
     try {
+      if (ArchiveFormatSupport.unavailablePreviewReason(archivePath) != null) {
+        return null;
+      }
       final file = File(archivePath);
       if (!file.existsSync() || file.lengthSync() == 0) return Archive();
       final bytes = file.readAsBytesSync();

@@ -18,6 +18,7 @@ import '../ui/screens/document_viewer_screen.dart';
 import '../ui/screens/archive_viewer_screen.dart';
 import '../ui/screens/database_reader_screen.dart';
 import '../services/archive_service.dart';
+import '../services/archive_format_support.dart';
 import '../services/apk_installer_service.dart';
 import '../ui/widgets/extract_archive_dialog.dart';
 import '../core/utils.dart';
@@ -2761,9 +2762,49 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> extractArchiveDirectly(BuildContext context, String path) async {
+    final unsupported = ArchiveFormatSupport.unavailableExtractionReason(path);
+    if (unsupported != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(unsupported)),
+      );
+      return;
+    }
+
     final destDir = p.join(p.dirname(path), p.basenameWithoutExtension(path));
-    final res = await ExtractArchiveDialog.show(context, archiveName: p.basename(path), defaultDestDir: destDir);
-    if (res != null && context.mounted) {
+    final res = await ExtractArchiveDialog.show(
+      context,
+      archiveName: p.basename(path),
+      defaultDestDir: destDir,
+    );
+    if (res == null || !context.mounted) return;
+
+    if (ArchiveFormatSupport.isSplitZipFirstVolume(path)) {
+      // The direct extractor recombines .zip.001, .002, etc. first.
+      // Background extraction cannot do that, so never dispatch it there.
+      final originalDirectory = currentPath;
+      try {
+        await ArchiveService.extractArchive(
+          archivePath: path,
+          destinationDir: res.destinationDir,
+          password: res.password,
+        );
+        if (!context.mounted) return;
+        if (currentPath == originalDirectory) {
+          await loadDirectory(originalDirectory, showLoading: false, clearCache: true);
+        }
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Split ZIP archive extracted successfully')),
+          );
+        }
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Split ZIP extraction failed: $e')),
+          );
+        }
+      }
+    } else {
       await BackgroundArchiveService.instance.startExtraction(
         context: context,
         archivePath: path,
