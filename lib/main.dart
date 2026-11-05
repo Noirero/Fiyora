@@ -56,7 +56,7 @@ void main() async {
       builder: () => getAudioHandler(),
       config: const AudioServiceConfig(
         androidNotificationChannelId: 'com.rubex.nfile.audio',
-        androidNotificationChannelName: 'NFile Audio Player',
+        androidNotificationChannelName: 'Fiyora Audio Player',
         androidNotificationIcon: 'mipmap/ic_launcher',
         androidShowNotificationBadge: true,
         androidStopForegroundOnPause: true,
@@ -316,7 +316,7 @@ class _NFileAppState extends State<NFileApp> {
 
             return MaterialApp(
               navigatorKey: navigatorKey,
-              title: 'NFile',
+              title: 'Fiyora Explorer',
               debugShowCheckedModeBanner: false,
               theme: AppTheme.getAppTheme(light: true, seed: baseSeedColor, customScheme: activeLightScheme, fontFamily: fileManager.fontFamilyOption),
               darkTheme: AppTheme.getAppTheme(light: false, pitchBlack: fileManager.amoledMode, seed: baseSeedColor, customScheme: activeDarkScheme, fontFamily: fileManager.fontFamilyOption),
@@ -465,7 +465,7 @@ class _StoragePermissionShield extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'NFile requires storage permission to manage, organize, and display your media files seamlessly.',
+                  'Fiyora Explorer requires storage permission to manage, organize, and display your media files seamlessly.',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey),
                 ),
