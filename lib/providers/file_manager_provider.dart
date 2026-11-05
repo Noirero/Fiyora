@@ -2695,6 +2695,7 @@ class FileManagerProvider extends ChangeNotifier {
         destinationPath: destinationPath,
         format: format,
         level: compressionLevel,
+        password: password,
         deleteSource: deleteSource,
       );
     } else {

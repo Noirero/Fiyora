@@ -97,8 +97,13 @@ class ArchiveService {
     final format = args['format'] as String;
     final level = args['level'] as int;
     final splitSizeMB = args['splitSizeMB'] as int?;
+    final password = args['password'] as String?;
     final deleteSource = args['deleteSource'] as bool;
     final safetySourcePaths = args['safetySourcePaths'] as List<String>;
+
+    if (password != null && password.isNotEmpty && format != 'zip') {
+      throw ArgumentError.value(format, 'format', 'Password protection is only supported for ZIP');
+    }
 
     final archive = Archive();
 
@@ -125,7 +130,8 @@ class ArchiveService {
     List<int>? encodedBytes;
 
     if (format == 'zip') {
-      encodedBytes = ZipEncoder().encode(archive, level: level);
+      encodedBytes = ZipEncoder(password: password?.isNotEmpty == true ? password : null)
+          .encode(archive, level: level);
     } else if (format == 'tar') {
       encodedBytes = TarEncoder().encode(archive);
     } else if (format == 'tar.gz') {
