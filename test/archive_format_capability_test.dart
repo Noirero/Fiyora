@@ -4,6 +4,7 @@ import 'dart:isolate';
 import 'package:archive/archive_io.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nfile/services/archive_service.dart';
+import 'package:nfile/services/archive_format_support.dart';
 import 'package:nfile/services/background_archive_service.dart';
 import 'package:path/path.dart' as p;
 
@@ -151,4 +152,38 @@ void main() {
     expect(result['status'], 'completed', reason: '$result');
     expect(File(p.join(output.path, 'safe.txt')).readAsBytesSync(), [83, 65, 70, 69]);
   });
+  test('background ZIP first volume must not be decoded as a whole archive', () async {
+    final mid = zipBytes.length ~/ 3;
+    final first = File(p.join(fixture.path, 'parts.zip.001'))
+      ..writeAsBytesSync(zipBytes.sublist(0, mid));
+    File(p.join(fixture.path, 'parts.zip.002'))
+        .writeAsBytesSync(zipBytes.sublist(mid));
+    final result = await backgroundExtract(first);
+    expect(result['status'], 'error', reason: '$result');
+    expect((result['error'] as String).toLowerCase(), contains('direct'));
+    expect(File(p.join(output.path, 'safe.txt')).existsSync(), false);
+  });
+
+  test('capability messages explicitly distinguish unsupported decoders', () {
+    expect(ArchiveFormatSupport.unavailablePreviewReason('notes.rar'), contains('RAR'));
+    expect(ArchiveFormatSupport.unavailablePreviewReason('notes.7z'), contains('7z'));
+    expect(ArchiveFormatSupport.unavailableExtractionReason('notes.rar'), contains('RAR'));
+    expect(ArchiveFormatSupport.unavailableExtractionReason('notes.7z'), contains('7z'));
+    expect(ArchiveFormatSupport.unavailablePreviewReason('parts.zip.001'), contains('Extract'));
+    expect(ArchiveFormatSupport.unavailableExtractionReason('parts.zip.001'), isNull);
+    expect(
+      ArchiveFormatSupport.unavailableExtractionReason('parts.zip.001', background: true),
+      contains('background'),
+    );
+  });
+
+  test('ordinary decoder paths retain supported capability', () {
+    for (final path in ['normal.zip', 'normal.tar', 'normal.tar.gz', 'normal.tar.zst']) {
+      expect(ArchiveFormatSupport.unavailableExtractionReason(path), isNull);
+      expect(ArchiveFormatSupport.unavailablePreviewReason(path), isNull);
+    }
+    expect(ArchiveFormatSupport.isSplitZipFirstVolume('PARTS.ZIP.001'), isTrue);
+    expect(ArchiveFormatSupport.isSplitZipFirstVolume('parts.tar.001'), isFalse);
+  });
+
 }
