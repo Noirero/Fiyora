@@ -25,13 +25,21 @@ void main() {
   });
 
   File zip(String archiveName, List<ArchiveFile> entries) {
-    final encoded = ZipEncoder().encode(Archive()..files.addAll(entries))
+    final archive = Archive();
+    for (final entry in entries) {
+      archive.addFile(entry);
+    }
+    final encoded = ZipEncoder().encode(archive)
         ?? (throw StateError('ZIP encoder returned null'));
     return File(p.join(fixture.path, archiveName))..writeAsBytesSync(encoded);
   }
 
   File tar(String archiveName, List<ArchiveFile> entries) {
-    final encoded = TarEncoder().encode(Archive()..files.addAll(entries));
+    final archive = Archive();
+    for (final entry in entries) {
+      archive.addFile(entry);
+    }
+    final encoded = TarEncoder().encode(archive);
     return File(p.join(fixture.path, archiveName))..writeAsBytesSync(encoded);
   }
 
