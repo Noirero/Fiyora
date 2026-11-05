@@ -21,11 +21,45 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-      - name: Resolve locked dependencies
-        run: flutter pub get --enforce-lockfile
-      - name: Verify original lockfile remains unchanged
-        run: git diff --exit-code -- pubspec.yaml pubspec.lock
+      - name: Check original lockfile compatibility (strict)
+        id: lockfile_check
+        shell: bash
+        run: |
+          set +e
+          flutter pub get --enforce-lockfile > /tmp/ar001-strict-pub.log 2>&1
+          rc=$?
+          set -e
+          tail -n 28 /tmp/ar001-strict-pub.log
+          if [[ "$rc" -eq 0 ]]; then
+            echo 'exact=true' >> "$GITHUB_OUTPUT"
+            echo 'Original pubspec.lock resolved without changes.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'exact=false' >> "$GITHUB_OUTPUT"
+            echo 'Original pubspec.lock is NOT compatible with this Flutter SDK; diagnostic tests will use temporary resolver-adjusted pins.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Resolve temporary dependencies for diagnostic tests
+        if: steps.lockfile_check.outputs.exact == 'false'
+        shell: bash
+        run: |
+          flutter pub get
+          echo '### Temporary dependency changes (runner only; NOT committed)' >> "$GITHUB_STEP_SUMMARY"
+          git diff --stat -- pubspec.lock >> "$GITHUB_STEP_SUMMARY"
+          git diff -- pubspec.lock
+      - name: Assert dependency declarations unchanged
+        run: git diff --exit-code -- pubspec.yaml
+      - name: Assert original lockfile untouched when strict resolution works
+        if: steps.lockfile_check.outputs.exact == 'true'
+        run: git diff --exit-code -- pubspec.lock
       - name: AR-001 targeted regression
         run: flutter test --no-pub test/archive_source_destination_safety_test.dart
       - name: Full Flutter regression suite
         run: flutter test --no-pub
+      - name: Enforce original lockfile acceptance gate
+        if: always()
+        env:
+          LOCKFILE_EXACT: ${{ steps.lockfile_check.outputs.exact }}
+        run: |
+          if [[ "$LOCKFILE_EXACT" != 'true' ]]; then
+            echo '::error::Original lockfile compatibility is NOT verified. Diagnostic Flutter test results are resolver-adjusted and not merge approval.'
+            exit 1
+          fi
