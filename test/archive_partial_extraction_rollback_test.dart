@@ -192,7 +192,9 @@ void main() {
     final path = p.join(destination.path, 'temporary');
     final rollback = ArchiveExtractionRollback();
     rollback.createDirectory(path);
-    Directory(path).deleteSync();
+    // Simulate an external actor discarding the original directory,
+    // including its operation-private marker, before replacing it.
+    Directory(path).deleteSync(recursive: true);
 
     // Another actor creates a directory with the same pathname.
     final replacement = Directory(path)..createSync();
@@ -237,6 +239,36 @@ void main() {
     next.createFile(path);
     File(path).writeAsStringSync('RETRY OK');
     expect(File(path).readAsStringSync(), 'RETRY OK');
+  });
+
+  test('successful completion removes private ownership markers', () {
+    final path = p.join(destination.path, 'created', 'nested', 'ok.txt');
+    final rollback = ArchiveExtractionRollback();
+    rollback.createFile(path);
+    File(path).writeAsStringSync('OK');
+    rollback.noteFileWritten(path);
+    rollback.complete();
+
+    expect(File(path).readAsStringSync(), 'OK');
+    final files = Directory(p.join(destination.path, 'created'))
+        .listSync(recursive: true);
+    expect(
+      files.where((e) => p.basename(e.path).startsWith('.fiyora-extract-rollback-')),
+      isEmpty,
+      reason: 'Internal ownership markers must not persist on success',
+    );
+  });
+
+  test('rollback preserves another actor file inside a created directory', () {
+    final path = p.join(destination.path, 'created-by-extractor');
+    final rollback = ArchiveExtractionRollback();
+    rollback.createDirectory(path);
+    final external = File(p.join(path, 'added-by-user.txt'))
+      ..writeAsStringSync('KEEP USER FILE');
+    rollback.rollback();
+
+    expect(external.readAsStringSync(), 'KEEP USER FILE');
+    expect(Directory(path).existsSync(), true);
   });
 
 }
