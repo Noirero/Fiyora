@@ -29,7 +29,7 @@ void main() {
     final archive = Archive()..addFile(ArchiveFile(name, content.length, content));
     final encoded = ZipEncoder().encode(archive);
     final path = p.join(fixture.path, 'input.zip');
-    return File(path)..writeAsBytesSync(encoded);
+    return File(path)..writeAsBytesSync(encoded ?? (throw StateError('ZIP encoder returned no bytes')));
   }
 
   Future<Map> extractInWorker(String archivePath) async {
