@@ -1,0 +1,45 @@
+name: Archive safety Android compile check (no release)
+
+on:
+  push:
+    branches:
+      - review/archive-safety-android-compile-20261105
+
+permissions:
+  contents: read
+
+jobs:
+  android-compile-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.44.0'
+      - name: Resolve original dependency lockfile
+        run: flutter pub get --enforce-lockfile
+      - name: Check dependency files unchanged
+        run: git diff --exit-code -- pubspec.yaml pubspec.lock
+      - name: Apply existing flutter_avif_android CI workaround (runner only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="$(find "$HOME/.pub-cache" -name 'FlutterAvifPlugin.java' 2>/dev/null | head -1 || true)"
+          if [[ -n "$FILE" ]]; then
+            printf '// CI-only workaround: Kotlin implementation owns FlutterAvifPlugin\n' > "$FILE"
+          fi
+      - name: Compile Android debug ARM64 (no publish)
+        run: flutter build apk --debug --target-platform android-arm64 --no-tree-shake-icons
+      - name: Verify a local debug APK was produced
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s build/app/outputs/flutter-apk/app-debug.apk
