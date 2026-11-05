@@ -252,7 +252,11 @@ class ArchiveService {
             try {
               fileEntry.writeContent(outputStream);
             } finally {
-              outputStream.closeSync();
+              try {
+                outputStream.closeSync();
+              } finally {
+                rollback.noteFileWritten(destPath);
+              }
             }
           } else {
             rollback.createDirectory(destPath);
@@ -285,7 +289,11 @@ class ArchiveService {
             try {
               fileEntry.writeContent(outputStream);
             } finally {
-              outputStream.closeSync();
+              try {
+                outputStream.closeSync();
+              } finally {
+                rollback.noteFileWritten(destPath);
+              }
             }
           } else {
             rollback.createDirectory(destPath);
@@ -314,7 +322,11 @@ class ArchiveService {
             try {
               fileEntry.writeContent(outputStream);
             } finally {
-              outputStream.closeSync();
+              try {
+                outputStream.closeSync();
+              } finally {
+                rollback.noteFileWritten(destPath);
+              }
             }
           } else {
             rollback.createDirectory(destPath);
@@ -341,28 +353,44 @@ class ArchiveService {
         final name = p.basenameWithoutExtension(archivePath);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         rollback.createFile(destFile.path);
-        destFile.writeAsBytesSync(decodedBytes);
+        try {
+          destFile.writeAsBytesSync(decodedBytes);
+        } finally {
+          rollback.noteFileWritten(destFile.path);
+        }
         return;
       } else if (lowerPath.endsWith('.bz2')) {
         final decodedBytes = BZip2Decoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         rollback.createFile(destFile.path);
-        destFile.writeAsBytesSync(decodedBytes);
+        try {
+          destFile.writeAsBytesSync(decodedBytes);
+        } finally {
+          rollback.noteFileWritten(destFile.path);
+        }
         return;
       } else if (lowerPath.endsWith('.lz4')) {
         final decodedBytes = lz4FrameDecode(bytes);
         final name = p.basenameWithoutExtension(archivePath);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         rollback.createFile(destFile.path);
-        destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
+        try {
+          destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
+        } finally {
+          rollback.noteFileWritten(destFile.path);
+        }
         return;
       } else if (lowerPath.endsWith('.zst') || lowerPath.endsWith('.zstd')) {
         final decodedBytes = const ZstdDecoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         rollback.createFile(destFile.path);
-        destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
+        try {
+          destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
+        } finally {
+          rollback.noteFileWritten(destFile.path);
+        }
         return;
       } else {
         // try streaming zip for unknown extension to avoid OOM
@@ -381,7 +409,11 @@ class ArchiveService {
               try {
                 fileEntry.writeContent(outputStream);
               } finally {
-                outputStream.closeSync();
+                try {
+                  outputStream.closeSync();
+                } finally {
+                  rollback.noteFileWritten(destPath);
+                }
               }
             } else {
               rollback.createDirectory(destPath);
@@ -402,7 +434,11 @@ class ArchiveService {
           final data = fileEntry.content as List<int>;
           final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, filename));
           rollback.createFile(destFile.path);
-          destFile.writeAsBytesSync(data);
+          try {
+            destFile.writeAsBytesSync(data);
+          } finally {
+            rollback.noteFileWritten(destFile.path);
+          }
         } else {
           rollback.createDirectory(checkedArchiveExtractionPath(destinationDir, filename));
         }

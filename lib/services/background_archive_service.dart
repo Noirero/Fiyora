@@ -457,7 +457,11 @@ class BackgroundArchiveService {
             try {
               fileEntry.writeContent(outputStream);
             } finally {
-              outputStream.closeSync();
+              try {
+                outputStream.closeSync();
+              } finally {
+                rollback.noteFileWritten(destPath);
+              }
             }
           } else {
             rollback.createDirectory(destPath);
@@ -503,7 +507,11 @@ class BackgroundArchiveService {
             try {
               fileEntry.writeContent(outputStream);
             } finally {
-              outputStream.closeSync();
+              try {
+                outputStream.closeSync();
+              } finally {
+                rollback.noteFileWritten(destPath);
+              }
             }
           } else {
             rollback.createDirectory(destPath);
@@ -544,7 +552,11 @@ class BackgroundArchiveService {
             try {
               fileEntry.writeContent(outputStream);
             } finally {
-              outputStream.closeSync();
+              try {
+                outputStream.closeSync();
+              } finally {
+                rollback.noteFileWritten(destPath);
+              }
             }
           } else {
             rollback.createDirectory(destPath);
@@ -573,7 +585,11 @@ class BackgroundArchiveService {
         final name = p.basenameWithoutExtension(archivePath);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         rollback.createFile(destFile.path);
-        destFile.writeAsBytesSync(decodedBytes);
+        try {
+          destFile.writeAsBytesSync(decodedBytes);
+        } finally {
+          rollback.noteFileWritten(destFile.path);
+        }
         sendPort.send({'status': 'completed'});
         return;
       } else if (lowerPath.endsWith('.bz2')) {
@@ -581,7 +597,11 @@ class BackgroundArchiveService {
         final name = p.basenameWithoutExtension(archivePath);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         rollback.createFile(destFile.path);
-        destFile.writeAsBytesSync(decodedBytes);
+        try {
+          destFile.writeAsBytesSync(decodedBytes);
+        } finally {
+          rollback.noteFileWritten(destFile.path);
+        }
         sendPort.send({'status': 'completed'});
         return;
       } else if (lowerPath.endsWith('.lz4')) {
@@ -589,7 +609,11 @@ class BackgroundArchiveService {
         final name = p.basenameWithoutExtension(archivePath);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         rollback.createFile(destFile.path);
-        destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
+        try {
+          destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
+        } finally {
+          rollback.noteFileWritten(destFile.path);
+        }
         sendPort.send({'status': 'completed'});
         return;
       } else if (lowerPath.endsWith('.zst') || lowerPath.endsWith('.zstd')) {
@@ -597,7 +621,11 @@ class BackgroundArchiveService {
         final name = p.basenameWithoutExtension(archivePath);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         rollback.createFile(destFile.path);
-        destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
+        try {
+          destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
+        } finally {
+          rollback.noteFileWritten(destFile.path);
+        }
         sendPort.send({'status': 'completed'});
         return;
       } else {
@@ -628,7 +656,11 @@ class BackgroundArchiveService {
               try {
                 fileEntry.writeContent(outputStream);
               } finally {
-                outputStream.closeSync();
+                try {
+                  outputStream.closeSync();
+                } finally {
+                  rollback.noteFileWritten(destPath);
+                }
               }
             } else {
               rollback.createDirectory(destPath);
@@ -661,7 +693,11 @@ class BackgroundArchiveService {
           final data = fileEntry.content as List<int>;
           final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, filename));
           rollback.createFile(destFile.path);
-          destFile.writeAsBytesSync(data);
+          try {
+            destFile.writeAsBytesSync(data);
+          } finally {
+            rollback.noteFileWritten(destFile.path);
+          }
         } else {
           rollback.createDirectory(checkedArchiveExtractionPath(destinationDir, filename));
         }
