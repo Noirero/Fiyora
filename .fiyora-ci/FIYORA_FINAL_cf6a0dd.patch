@@ -1,0 +1,4957 @@
+diff --git a/android/app/src/main/kotlin/com/rubex/nfile/MainActivity.kt b/android/app/src/main/kotlin/com/rubex/nfile/MainActivity.kt
+index c67c7b8484aae46e12f9f3e4f7915e5a9f1f741c..0b48dacb286c5ee00fd52128768b729dd46bd5c0 100644
+--- a/android/app/src/main/kotlin/com/rubex/nfile/MainActivity.kt
++++ b/android/app/src/main/kotlin/com/rubex/nfile/MainActivity.kt
+@@ -51,7 +51,8 @@ class MainActivity : AudioServiceFragmentActivity() {
+     private val cancelReceiver = object : BroadcastReceiver() {
+         override fun onReceive(context: Context?, intent: Intent?) {
+             if (intent?.action == ACTION_CANCEL_OPERATION) {
+-                notificationsChannel?.invokeMethod("cancelOperationFromNotification", null)
++                val operationId = intent.getStringExtra("operationId") ?: return
++                notificationsChannel?.invokeMethod("cancelOperationFromNotification", mapOf("operationId" to operationId))
+             }
+         }
+     }
+@@ -727,6 +728,8 @@ class MainActivity : AudioServiceFragmentActivity() {
+                     val progress = call.argument<Int>("progress") ?: 0
+                     val max = call.argument<Int>("max") ?: 100
+                     val indeterminate = call.argument<Boolean>("indeterminate") ?: false
++                    val operationId = call.argument<String>("operationId")
++                    val canCancel = call.argument<Boolean>("canCancel") ?: true
+ 
+                     var iconId = applicationContext.resources.getIdentifier("ic_launcher", "mipmap", packageName)
+                     if (iconId == 0) {
+@@ -735,6 +738,11 @@ class MainActivity : AudioServiceFragmentActivity() {
+ 
+                     val cancelIntent = Intent(ACTION_CANCEL_OPERATION).apply {
+                         setPackage(packageName)
++                        putExtra("operationId", operationId)
++                        // PendingIntent matching ignores extras. Include the full
++                        // identity in data so hash/request-code collisions cannot
++                        // mutate an older notification's cancellation target.
++                        data = Uri.parse("fiyora://archive/cancel/${Uri.encode(operationId ?: "")}")
+                     }
+                     val cancelPendingIntent = PendingIntent.getBroadcast(
+                         this@MainActivity,
+@@ -763,7 +771,9 @@ class MainActivity : AudioServiceFragmentActivity() {
+ 
+                     if (progress < max) {
+                         builder.addAction(android.R.drawable.ic_menu_view, "Open", openPendingIntent)
+-                        builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel", cancelPendingIntent)
++                        if (canCancel && operationId != null) {
++                            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel", cancelPendingIntent)
++                        }
+                     }
+ 
+                     if (indeterminate) {
+diff --git a/lib/providers/file_manager_provider.dart b/lib/providers/file_manager_provider.dart
+index 7885269b0d21cd0451b734e21ebabd2edffb1c6c..38f54a0daab2f7624aae85c6f221f5d10305f3e4 100644
+--- a/lib/providers/file_manager_provider.dart
++++ b/lib/providers/file_manager_provider.dart
+@@ -2719,7 +2719,7 @@ class FileManagerProvider extends ChangeNotifier {
+       );
+     } else {
+       try {
+-        await ArchiveService.createArchive(
++        final outcome = await ArchiveService.createArchive(
+           sourcePaths: paths,
+           destinationDir: currentPath,
+           archiveName: archiveName,
+@@ -2730,6 +2730,15 @@ class FileManagerProvider extends ChangeNotifier {
+           deleteSource: deleteSource,
+           separateArchives: separateArchives,
+         );
++        if (outcome.isPartial) {
++          debugPrint(outcome.message);
++          if (context != null && context.mounted) {
++            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
++              content: Text(outcome.message),
++              backgroundColor: Colors.orange,
++            ));
++          }
++        }
+       } catch (e) {
+         debugPrint('Error creating archive: $e');
+       }
+diff --git a/lib/services/archive_creation_outcome.dart b/lib/services/archive_creation_outcome.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..1b1f8fe625ce92b282873c226f23aa6a54622426
+--- /dev/null
++++ b/lib/services/archive_creation_outcome.dart
+@@ -0,0 +1,82 @@
++/// Completed archive outputs, optional source cleanup, and a stopped batch.
++/// A partial failure never authorizes rollback or automatic cleanup retries.
++class ArchiveCreationOutcome {
++  ArchiveCreationOutcome({
++    required List<String> archivePaths,
++    List<ArchiveSourceCleanupFailure> sourceCleanupFailures = const [],
++    this.batchFailure,
++  }) : archivePaths = List.unmodifiable(archivePaths),
++       sourceCleanupFailures = List.unmodifiable(sourceCleanupFailures);
++
++  final List<String> archivePaths;
++  final List<ArchiveSourceCleanupFailure> sourceCleanupFailures;
++  final ArchiveBatchFailure? batchFailure;
++
++  bool get archiveCreated => archivePaths.isNotEmpty;
++  bool get isPartial => batchFailure != null || sourceCleanupFailures.isNotEmpty;
++
++  String get message {
++    final failure = batchFailure;
++    if (failure != null) {
++      final cleanupMessage = sourceCleanupFailures.isEmpty
++          ? ''
++          : ' ${sourceCleanupFailures.length} source(s) could not be removed.';
++      return '${archivePaths.length} archive output(s) created; batch stopped at '
++          '"${failure.sourcePath}": ${failure.error}. '
++          'Existing archives were kept; cleanup for the failed and remaining batch items was skipped.'
++          '$cleanupMessage';
++    }
++    return sourceCleanupFailures.isNotEmpty
++        ? 'Archive created, but ${sourceCleanupFailures.length} source(s) could not be removed. '
++              'The archive was kept; review the remaining sources before retrying cleanup.'
++        : 'Archive created successfully';
++  }
++
++  Map<String, Object> toWorkerMessage() => {
++    'status': isPartial ? 'partial' : 'completed',
++    'archiveCreated': archiveCreated,
++    'reason': batchFailure != null
++        ? 'batchCreationFailed'
++        : isPartial
++        ? 'sourceCleanupFailed'
++        : 'archiveCreated',
++    'archivePaths': archivePaths,
++    'sourceCleanupFailures': sourceCleanupFailures
++        .map((failure) => failure.toMap())
++        .toList(),
++    'message': message,
++    if (batchFailure != null) 'batchFailure': batchFailure!.toMap(),
++  };
++}
++
++/// The first creation error that stopped a batch after earlier outputs succeeded.
++/// Keep the original error and stack for direct callers; serialize text for ports.
++class ArchiveBatchFailure {
++  const ArchiveBatchFailure({
++    required this.sourcePath,
++    required this.archivePath,
++    required this.error,
++    required this.stackTrace,
++  });
++
++  final String sourcePath;
++  final String archivePath;
++  final Object error;
++  final StackTrace stackTrace;
++
++  Map<String, String> toMap() => {
++    'sourcePath': sourcePath,
++    'archivePath': archivePath,
++    'error': error.toString(),
++    'stackTrace': stackTrace.toString(),
++  };
++}
++
++class ArchiveSourceCleanupFailure {
++  const ArchiveSourceCleanupFailure(this.path, this.error);
++
++  final String path;
++  final String error;
++
++  Map<String, String> toMap() => {'path': path, 'error': error};
++}
+diff --git a/lib/services/archive_extraction.dart b/lib/services/archive_extraction.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..8acd353f7437fdd753a9994ab855d5bfe537c647
+--- /dev/null
++++ b/lib/services/archive_extraction.dart
+@@ -0,0 +1,261 @@
++import 'dart:async';
++import 'dart:io';
++import 'dart:typed_data';
++
++import 'package:archive/archive_io.dart';
++import 'package:dart_lz4/dart_lz4.dart';
++import 'package:just_zstd/just_zstd.dart';
++import 'package:path/path.dart' as p;
++
++import 'archive_extraction_staging.dart';
++import 'archive_format_support.dart';
++import 'archive_no_overwrite_safety.dart';
++
++class ArchiveExtractionFailure implements Exception {
++  ArchiveExtractionFailure(
++    this.cause,
++    this.publishedPaths, {
++    this.cancelled = false,
++  });
++  final Object cause;
++  final List<String> publishedPaths;
++  final bool cancelled;
++  bool get isPartial => publishedPaths.isNotEmpty;
++  @override
++  String toString() =>
++      '${isPartial ? "Partial extraction: published outputs preserved; " : "Extraction failed: "}$cause';
++}
++
++/// Decode completely into anonymous operation-private files before publishing.
++/// Publication is exclusive per file, NOT atomic across files or crash-safe.
++class ArchiveExtraction {
++  static Future<void> extract({
++    required String archivePath,
++    required String destinationDir,
++    String? password,
++    bool background = false,
++    bool Function()? isCancelled,
++    Future<void> Function(String phase, List<String> publishedPaths)?
++    onBoundary,
++  }) async {
++    // Keep the public unsupported-format exception contract unchanged.
++    ArchiveFormatSupport.requireExtractable(
++      archivePath,
++      background: background,
++    );
++    final staged = <String, ArchivePrivateFile>{};
++    final published = <String>[];
++    final resources = <ArchivePrivateFile>[];
++    final streams = <InputFileStream>[];
++    ArchiveExclusivePublisher? publisher;
++    Future<void> boundary(String phase) async {
++      await onBoundary?.call(phase, List.unmodifiable(published));
++      await Future<void>.delayed(Duration.zero);
++      if (isCancelled?.call() ?? false) {
++        throw ArchiveExtractionFailure(
++          'Cancellation requested',
++          List.unmodifiable(published),
++          cancelled: true,
++        );
++      }
++    }
++
++    void created(String relative) {
++      final path = p.join(destinationDir, relative);
++      if (!published.contains(path)) published.add(path);
++    }
++
++    try {
++      final originalName = archivePath.toLowerCase();
++      String inputPath = archivePath;
++      if (archivePath.endsWith('.001')) {
++        final combined = ArchivePrivateFile();
++        resources.add(combined);
++        final output = File(combined.path).openSync(mode: FileMode.write);
++        try {
++          final base = archivePath.substring(0, archivePath.length - 4);
++          for (var part = 1; ; part++) {
++            final file = File('$base.${part.toString().padLeft(3, '0')}');
++            if (!file.existsSync()) break;
++            final input = file.openSync();
++            try {
++              while (true) {
++                final bytes = input.readSync(65536);
++                if (bytes.isEmpty) break;
++                output.writeFromSync(bytes);
++              }
++            } finally {
++              input.closeSync();
++            }
++          }
++        } finally {
++          output.closeSync();
++        }
++        inputPath = combined.path;
++      }
++
++      InputFileStream openInput(String path) {
++        final stream = InputFileStream(path);
++        streams.add(stream);
++        return stream;
++      }
++
++      late Archive archive;
++      if (originalName.endsWith('.zip') || originalName.contains('.zip.')) {
++        archive = ZipDecoder().decodeBuffer(
++          openInput(inputPath),
++          password: password?.isNotEmpty == true ? password : null,
++        );
++      } else if (originalName.endsWith('.tar.gz') ||
++          originalName.endsWith('.tgz')) {
++        final tar = ArchivePrivateFile();
++        resources.add(tar);
++        final output = OutputFileStream(tar.path);
++        try {
++          GZipDecoder().decodeStream(openInput(inputPath), output);
++        } finally {
++          output.closeSync();
++        }
++        archive = TarDecoder().decodeBuffer(openInput(tar.path));
++      } else if (originalName.endsWith('.tar')) {
++        archive = TarDecoder().decodeBuffer(openInput(inputPath));
++      } else {
++        final bytes = File(inputPath).readAsBytesSync();
++        if (originalName.endsWith('.tar.bz2') ||
++            originalName.endsWith('.tbz2')) {
++          archive = TarDecoder().decodeBytes(BZip2Decoder().decodeBytes(bytes));
++        } else if (originalName.endsWith('.tar.lz4') ||
++            originalName.endsWith('.tlz4')) {
++          archive = TarDecoder().decodeBytes(
++            Uint8List.fromList(lz4FrameDecode(bytes)),
++          );
++        } else if (originalName.endsWith('.tar.zst') ||
++            originalName.endsWith('.tzst')) {
++          archive = TarDecoder().decodeBytes(
++            Uint8List.fromList(const ZstdDecoder().decodeBytes(bytes)),
++          );
++        } else if (originalName.endsWith('.gz') ||
++            originalName.endsWith('.bz2') ||
++            originalName.endsWith('.lz4') ||
++            originalName.endsWith('.zst') ||
++            originalName.endsWith('.zstd')) {
++          final decoded = originalName.endsWith('.gz')
++              ? GZipDecoder().decodeBytes(bytes)
++              : originalName.endsWith('.bz2')
++              ? BZip2Decoder().decodeBytes(bytes)
++              : originalName.endsWith('.lz4')
++              ? lz4FrameDecode(bytes)
++              : const ZstdDecoder().decodeBytes(bytes);
++          archive = Archive()
++            ..addFile(
++              ArchiveFile(
++                p.basenameWithoutExtension(archivePath),
++                decoded.length,
++                decoded,
++              ),
++            );
++        } else {
++          archive = ZipDecoder().decodeBuffer(
++            openInput(inputPath),
++            password: password?.isNotEmpty == true ? password : null,
++          );
++        }
++      }
++
++      final targets = <String, bool>{};
++      for (final entry in archive.files) {
++        final name = _relativeName(entry.name);
++        if (name.isEmpty && entry.isFile) {
++          throw FileSystemException('Empty archive file name');
++        }
++        if (targets[name] == true ||
++            (entry.isFile && targets.containsKey(name))) {
++          throw FileSystemException(
++            'Duplicate or colliding archive output',
++            entry.name,
++          );
++        }
++        targets[name] = entry.isFile;
++      }
++      for (final name in targets.keys) {
++        var parent = p.posix.dirname(name);
++        while (parent != '.' && parent.isNotEmpty) {
++          if (targets[parent] == true) {
++            throw FileSystemException('Archive file/directory collision', name);
++          }
++          parent = p.posix.dirname(parent);
++        }
++      }
++      for (final entry in archive.files) {
++        await boundary('staging');
++        final name = _relativeName(entry.name);
++        if (!entry.isFile) continue;
++        final output = ArchivePrivateFile();
++        resources.add(output);
++        staged[name] = output;
++        final writer = OutputFileStream(output.path);
++        try {
++          entry.writeContent(writer);
++        } finally {
++          writer.closeSync();
++        }
++      }
++      // Destination validation belongs to publication, after decode/staging.
++      await boundary('staged');
++      publisher = ArchiveExclusivePublisher(
++        destinationDir,
++        onRootCreated: (path) {
++          if (!published.contains(path)) published.add(path);
++        },
++      );
++      validateArchiveExtractionPlan(destinationDir, archive.files);
++      for (final entry in archive.files) {
++        await boundary('publishing');
++        final name = _relativeName(entry.name);
++        if (entry.isFile) {
++          publisher.publishFile(name, staged[name]!, created);
++        } else if (name.isNotEmpty) {
++          publisher.publishDirectory(name, created);
++        }
++        await boundary('published');
++      }
++    } on ArchiveExtractionFailure {
++      rethrow;
++    } catch (error) {
++      throw ArchiveExtractionFailure(error, List.unmodifiable(published));
++    } finally {
++      publisher?.close();
++      for (final stream in streams.reversed) {
++        try {
++          stream.closeSync();
++        } catch (_) {}
++      }
++      // Closing owned anonymous descriptors lets the kernel reclaim exactly
++      // those inodes. No destination/staging pathname is ever unlinked.
++      for (final resource in resources.reversed) {
++        resource.close();
++      }
++    }
++  }
++
++  static String _relativeName(String name) {
++    final portable = name.replaceAll('\\', '/');
++    if (portable.isEmpty ||
++        portable.contains('\u0000') ||
++        portable.startsWith('/') ||
++        RegExp(r'^[A-Za-z]:').hasMatch(portable)) {
++      throw FileSystemException('Unsafe archive entry path', name);
++    }
++    final parts = portable
++        .split('/')
++        .where((part) => part.isNotEmpty && part != '.')
++        .toList();
++    if (parts.contains('..')) {
++      throw FileSystemException(
++        'Archive entry contains parent traversal',
++        name,
++      );
++    }
++    return parts.join('/');
++  }
++}
+diff --git a/lib/services/archive_extraction_staging.dart b/lib/services/archive_extraction_staging.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..9c32703941555f2aa5b2cd0a416c91cbce8329ac
+--- /dev/null
++++ b/lib/services/archive_extraction_staging.dart
+@@ -0,0 +1,306 @@
++import 'dart:convert';
++import 'dart:ffi';
++import 'dart:io';
++
++import 'package:path/path.dart' as p;
++
++/// Linux/Android retained-descriptor staging and exclusive publication.
++/// There is deliberately no pathname-based rollback or unsafe fallback.
++class ArchivePrivateFile implements Finalizable {
++  ArchivePrivateFile() {
++    final api = _NativeFiles.instance;
++    final fd = api.withString(
++      Directory.systemTemp.path,
++      (path) => api.open(path, 0x410000 | 2 | 0x80000, 384),
++    ); // O_TMPFILE|RDWR
++    if (fd < 0) api.fail('Anonymous private extraction staging unavailable');
++    _stream = api.withString('w+b', (mode) => api.fdopen(fd, mode));
++    if (_stream == nullptr) {
++      api.close(fd);
++      api.fail('Cannot retain private extraction staging');
++    }
++    descriptor = fd;
++    _finalizer.attach(this, _stream, detach: _detach);
++  }
++
++  static final _finalizer = NativeFinalizer(
++    _NativeFiles.instance.fcloseFinalizer,
++  );
++  late final int descriptor;
++  late final Pointer<Void> _stream;
++  final Object _detach = Object();
++  bool _closed = false;
++
++  /// /proc/self/fd refers to the live owned anonymous inode, not a mutable
++  /// user pathname. Keep this owner alive until all reopened writers close.
++  String get path => '/proc/self/fd/$descriptor';
++
++  void close() {
++    if (_closed) return;
++    _closed = true;
++    _finalizer.detach(_detach);
++    _NativeFiles.instance.fclose(_stream);
++  }
++}
++
++class ArchiveExclusivePublisher {
++  ArchiveExclusivePublisher(
++    String destination, {
++    void Function(String)? onRootCreated,
++  }) {
++    _root = _NativeFiles.instance.openDirectory(
++      destination,
++      create: true,
++      onCreated: (path) => onRootCreated?.call('/$path'),
++    );
++  }
++  late final int _root;
++  bool _closed = false;
++
++  void publishDirectory(String relative, void Function(String) onCreated) {
++    final fd = _NativeFiles.instance.walk(
++      _root,
++      relative,
++      create: true,
++      onCreated: onCreated,
++    );
++    _NativeFiles.instance.close(fd);
++  }
++
++  void publishFile(
++    String relative,
++    ArchivePrivateFile staged,
++    void Function(String) onCreated,
++  ) {
++    final api = _NativeFiles.instance;
++    final parent = p.posix.dirname(relative);
++    final parentFd = api.walk(
++      _root,
++      parent,
++      create: true,
++      onCreated: onCreated,
++    );
++    int output = -1;
++    try {
++      output = api.withString(
++        p.posix.basename(relative),
++        (name) =>
++            api.openat(parentFd, name, 1 | 64 | 128 | 0x20000 | 0x80000, 384),
++      );
++      if (output < 0) {
++        api.fail('Exclusive archive publication refused', relative);
++      }
++      // Include incomplete outputs in a failure result as soon as created.
++      onCreated(relative);
++      final buffer = api.malloc(65536).cast<Uint8>();
++      if (buffer == nullptr) {
++        throw StateError('Publication buffer allocation failed');
++      }
++      RandomAccessFile? input;
++      try {
++        input = File(staged.path).openSync();
++        while (true) {
++          final bytes = input.readSync(65536);
++          if (bytes.isEmpty) break;
++          buffer.asTypedList(bytes.length).setAll(0, bytes);
++          var offset = 0;
++          while (offset < bytes.length) {
++            final count = api.write(
++              output,
++              buffer + offset,
++              bytes.length - offset,
++            );
++            if (count <= 0) {
++              api.fail('Archive publication write failed', relative);
++            }
++            offset += count;
++          }
++        }
++      } finally {
++        api.free(buffer.cast());
++        input?.closeSync();
++      }
++    } finally {
++      if (output >= 0) api.close(output);
++      api.close(parentFd);
++    }
++  }
++
++  void close() {
++    if (_closed) return;
++    _closed = true;
++    _NativeFiles.instance.close(_root);
++  }
++}
++
++class _NativeFiles {
++  _NativeFiles() {
++    if ((!Platform.isLinux && !Platform.isAndroid) ||
++        ![
++          Abi.linuxX64,
++          Abi.linuxArm64,
++          Abi.androidX64,
++          Abi.androidArm64,
++        ].contains(Abi.current())) {
++      throw UnsupportedError(
++        'Safe extraction publication requires Linux/Android descriptors',
++      );
++    }
++  }
++  static final instance = _NativeFiles();
++  final _lib = DynamicLibrary.process();
++  late final open = _lib
++      .lookupFunction<
++        Int32 Function(Pointer<Uint8>, Int32, Uint32),
++        int Function(Pointer<Uint8>, int, int)
++      >('open');
++  late final openat = _lib
++      .lookupFunction<
++        Int32 Function(Int32, Pointer<Uint8>, Int32, Uint32),
++        int Function(int, Pointer<Uint8>, int, int)
++      >('openat');
++  late final mkdirat = _lib
++      .lookupFunction<
++        Int32 Function(Int32, Pointer<Uint8>, Uint32),
++        int Function(int, Pointer<Uint8>, int)
++      >('mkdirat');
++  late final close = _lib
++      .lookupFunction<Int32 Function(Int32), int Function(int)>('close');
++  late final write = _lib
++      .lookupFunction<
++        IntPtr Function(Int32, Pointer<Uint8>, UintPtr),
++        int Function(int, Pointer<Uint8>, int)
++      >('write');
++  late final malloc = _lib
++      .lookupFunction<
++        Pointer<Void> Function(UintPtr),
++        Pointer<Void> Function(int)
++      >('malloc');
++  late final free = _lib
++      .lookupFunction<
++        Void Function(Pointer<Void>),
++        void Function(Pointer<Void>)
++      >('free');
++  late final fdopen = _lib
++      .lookupFunction<
++        Pointer<Void> Function(Int32, Pointer<Uint8>),
++        Pointer<Void> Function(int, Pointer<Uint8>)
++      >('fdopen');
++  late final fclose = _lib
++      .lookupFunction<
++        Int32 Function(Pointer<Void>),
++        int Function(Pointer<Void>)
++      >('fclose');
++  // fclose's return value is intentionally discarded by the finalizer ABI.
++  late final fcloseFinalizer = _lib
++      .lookup<NativeFunction<Void Function(Pointer<Void>)>>('fclose');
++  late final errno = _lib
++      .lookupFunction<Pointer<Int32> Function(), Pointer<Int32> Function()>(
++        Platform.isAndroid ? '__errno' : '__errno_location',
++      );
++
++  T withString<T>(String text, T Function(Pointer<Uint8>) body) {
++    final bytes = utf8.encode(text);
++    final pointer = malloc(bytes.length + 1).cast<Uint8>();
++    if (pointer == nullptr) throw StateError('Native path allocation failed');
++    try {
++      pointer.asTypedList(bytes.length + 1).setAll(0, [...bytes, 0]);
++      return body(pointer);
++    } finally {
++      free(pointer.cast());
++    }
++  }
++
++  Never fail(String message, [String? path]) {
++    final code = errno().value;
++    throw FileSystemException(
++      message,
++      path ?? '',
++      OSError('errno $code', code),
++    );
++  }
++
++  int openDirectory(
++    String path, {
++    required bool create,
++    void Function(String)? onCreated,
++  }) {
++    // The selected root may itself be an alias (for example /sdcard). Resolve
++    // its existing ancestor once, then retain no-follow directory descriptors.
++    // Paths originating in archive entries are never canonicalized this way.
++    var existing = p.normalize(p.absolute(path));
++    final missing = <String>[];
++    while (!Directory(existing).existsSync()) {
++      final parent = p.dirname(existing);
++      if (parent == existing) fail('Cannot resolve extraction root', path);
++      missing.insert(0, p.basename(existing));
++      existing = parent;
++    }
++    final canonical = Directory(existing).resolveSymbolicLinksSync();
++    final resolved = p.joinAll([canonical, ...missing]);
++    final root = withString(
++      '/',
++      (name) => open(name, 0x10000 | 0x20000 | 0x80000, 0),
++    );
++    if (root < 0) fail('Cannot open extraction root', path);
++    try {
++      return walk(
++        root,
++        resolved.replaceAll('\\', '/'),
++        create: create,
++        onCreated: onCreated,
++      );
++    } finally {
++      close(root);
++    }
++  }
++
++  int walk(
++    int root,
++    String relative, {
++    required bool create,
++    void Function(String)? onCreated,
++  }) {
++    var current = withString(
++      '.',
++      (name) => openat(root, name, 0x10000 | 0x20000 | 0x80000, 0),
++    );
++    if (current < 0) fail('Cannot retain extraction directory', relative);
++    var prefix = '';
++    try {
++      for (final part
++          in relative
++              .split('/')
++              .where((part) => part.isNotEmpty && part != '.')) {
++        if (part == '..') {
++          throw FileSystemException('Parent traversal refused', relative);
++        }
++        prefix = prefix.isEmpty ? part : '$prefix/$part';
++        var next = withString(
++          part,
++          (name) => openat(current, name, 0x10000 | 0x20000 | 0x80000, 0),
++        );
++        if (next < 0 && create) {
++          final made = withString(part, (name) => mkdirat(current, name, 448));
++          if (made == 0) onCreated?.call(prefix);
++          next = withString(
++            part,
++            (name) => openat(current, name, 0x10000 | 0x20000 | 0x80000, 0),
++          );
++        }
++        if (next < 0) {
++          fail(
++            'Extraction directory is unavailable or a symbolic link',
++            relative,
++          );
++        }
++        close(current);
++        current = next;
++      }
++      return current;
++    } catch (_) {
++      close(current);
++      rethrow;
++    }
++  }
++}
+diff --git a/lib/services/archive_input_entries.dart b/lib/services/archive_input_entries.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..13e71ab0309ab977d281799d9be724263eade00a
+--- /dev/null
++++ b/lib/services/archive_input_entries.dart
+@@ -0,0 +1,132 @@
++import 'dart:convert';
++import 'dart:io';
++
++import 'package:archive/archive.dart';
++import 'package:path/path.dart' as p;
++
++/// A selected source's portable relative archive name and filesystem entity.
++class ArchiveInputEntry {
++  ArchiveInputEntry(this.fullPath, this.relPath, {required this.isDirectory});
++
++  final String fullPath;
++  final String relPath;
++  final bool isDirectory;
++
++  ArchiveFile read() {
++    if (isDirectory) {
++      return ArchiveFile('$relPath/', 0, <int>[])
++        ..isFile = false
++        ..mode = 0x41ed; // Directory with ordinary 0755 permissions.
++    }
++    final bytes = File(fullPath).readAsBytesSync();
++    return ArchiveFile(relPath, bytes.length, bytes);
++  }
++}
++
++/// Include explicit directory entries, including selected empty roots.
++///
++/// Repeated selections of the same source/name are harmless. Different sources
++/// with the same archive name fail rather than silently replacing an entry.
++List<ArchiveInputEntry> collectArchiveInputEntries(List<String> sourcePaths) {
++  final entries = <String, ArchiveInputEntry>{};
++
++  void add(String path, String name, {required bool isDirectory}) {
++    if (name.isEmpty ||
++        name.contains('\\') ||
++        name.contains('\n') ||
++        name.contains('\r') ||
++        p.posix.isAbsolute(name) ||
++        p.windows.isAbsolute(name) ||
++        RegExp(r'^[A-Za-z]:').hasMatch(name) ||
++        name
++            .split('/')
++            .any((part) => part.isEmpty || part == '.' || part == '..')) {
++      throw FileSystemException('Unsafe archive entry name', name);
++    }
++    final previous = entries[name];
++    if (previous != null) {
++      if (previous.fullPath == path && previous.isDirectory == isDirectory) {
++        return;
++      }
++      throw FileSystemException('Conflicting archive entry name', name);
++    }
++    entries[name] = ArchiveInputEntry(path, name, isDirectory: isDirectory);
++  }
++
++  for (final source in sourcePaths) {
++    final type = FileSystemEntity.typeSync(source);
++    if (type != FileSystemEntityType.file &&
++        type != FileSystemEntityType.directory) {
++      continue;
++    }
++    final canonical = File(source).resolveSymbolicLinksSync();
++    final absolute = p.normalize(p.absolute(source));
++    final rootName = p.equals(p.dirname(absolute), absolute)
++        ? ''
++        : p.basename(absolute);
++    if (type == FileSystemEntityType.file) {
++      add(canonical, rootName, isDirectory: false);
++      continue;
++    }
++    if (rootName.isNotEmpty) add(canonical, rootName, isDirectory: true);
++    for (final child in Directory(
++      canonical,
++    ).listSync(recursive: true, followLinks: false)) {
++      // Never follow a nested symlink outside the selected directory.
++      if (child is! File && child is! Directory) continue;
++      final relative = p
++          .split(p.relative(child.path, from: canonical))
++          .join('/');
++      final name = rootName.isEmpty ? relative : '$rootName/$relative';
++      add(child.path, name, isDirectory: child is Directory);
++    }
++  }
++  return entries.values.toList();
++}
++
++/// Preserve Unicode paths with standard UTF-8 PAX records. The pinned archive
++/// package writes legacy TAR header names as code units, so non-ASCII names
++/// otherwise change during round-trip. Existing extraction supports PAX paths.
++List<int> encodeTarArchiveEntries(Archive archive) {
++  final output = OutputStream();
++  final encoder = TarEncoder()..start(output);
++  for (final entry in archive.files) {
++    final pathBytes = utf8.encode(entry.name);
++    if (entry.name.codeUnits.any((unit) => unit > 0x7f) ||
++        pathBytes.length > 100) {
++      final value = 'path=${entry.name}\n';
++      final valueLength = utf8.encode(value).length;
++      var length = valueLength + 2;
++      while (length != valueLength + length.toString().length + 1) {
++        length = valueLength + length.toString().length + 1;
++      }
++      final record = utf8.encode('$length $value');
++      final header = TarFile()
++        ..filename = 'PaxHeaders/fiyora-path'
++        ..fileSize = record.length
++        ..mode = 0
++        ..ownerId = 0
++        ..groupId = 0
++        ..lastModTime = 0
++        ..typeFlag = TarFile.TYPE_EX_HEADER
++        ..content = record;
++      header.write(output);
++      // A short ASCII header prevents the legacy encoder from emitting its
++      // own code-unit GNU long-name record over the UTF-8 PAX path.
++      final encodedEntry =
++          ArchiveFile('fiyora-entry', entry.size, entry.content)
++            ..isFile = entry.isFile
++            ..mode = entry.mode
++            ..ownerId = entry.ownerId
++            ..groupId = entry.groupId
++            ..lastModTime = entry.lastModTime
++            ..isSymbolicLink = entry.isSymbolicLink
++            ..nameOfLinkedFile = entry.nameOfLinkedFile;
++      encoder.add(encodedEntry);
++    } else {
++      encoder.add(entry);
++    }
++  }
++  encoder.finish();
++  return output.getBytes();
++}
+diff --git a/lib/services/archive_operation_ownership.dart b/lib/services/archive_operation_ownership.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..4d4efcfd450d2497a70061bd768d3f878ebd9769
+--- /dev/null
++++ b/lib/services/archive_operation_ownership.dart
+@@ -0,0 +1,63 @@
++import 'dart:math';
++
++/// One lease for one background operation, retained until its worker has exited.
++///
++/// The lease object is the callback identity. The ID is for messages and Android
++/// notifications; it must not be reused as ownership of an older lease.
++class ArchiveOperationLease {
++  ArchiveOperationLease._(this.id);
++
++  final String id;
++}
++
++class ArchiveOperationBusyException implements Exception {
++  ArchiveOperationBusyException(this.activeOperationId);
++
++  final String activeOperationId;
++
++  @override
++  String toString() =>
++      'Another archive operation is still active: $activeOperationId';
++}
++
++/// Synchronous admission and identity checks for a single background worker.
++///
++/// Acquire before the first await or externally observable state change. A
++/// cancellation request does not release the lease: callers retain it until
++/// spawn failure or actual worker exit is acknowledged. Every callback must
++/// check [owns] before changing operation-specific state or resources.
++class ArchiveOperationOwnership {
++  final String _sessionId = _newSessionId();
++  int _serial = 0;
++  ArchiveOperationLease? _active;
++
++  ArchiveOperationLease? get active => _active;
++  bool get isBusy => _active != null;
++
++  ArchiveOperationLease acquire(String kind) {
++    final existing = _active;
++    if (existing != null) {
++      throw ArchiveOperationBusyException(existing.id);
++    }
++    final lease = ArchiveOperationLease._('$kind-$_sessionId-${++_serial}');
++    _active = lease;
++    return lease;
++  }
++
++  bool owns(ArchiveOperationLease lease) => identical(_active, lease);
++
++  /// A late completion/exit may never release a later operation's lease.
++  bool release(ArchiveOperationLease lease) {
++    if (!owns(lease)) return false;
++    _active = null;
++    return true;
++  }
++
++  static String _newSessionId() {
++    final random = Random.secure();
++    return List.generate(
++      16,
++      (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
++    ).join();
++  }
++}
+diff --git a/lib/services/archive_service.dart b/lib/services/archive_service.dart
+index 6b1587b8c4c8904dac289edc0923e6abbbea0ee9..b5802d70ec0fdee715fd9062e057ec2a0927bf74 100644
+--- a/lib/services/archive_service.dart
++++ b/lib/services/archive_service.dart
+@@ -6,13 +6,15 @@ import 'package:dart_lz4/dart_lz4.dart';
+ import 'package:just_zstd/just_zstd.dart';
+ import 'archive_path_safety.dart';
+ import 'archive_atomic_write.dart';
+-import 'archive_extraction_safety.dart';
+ import 'archive_format_support.dart';
+ import 'archive_no_overwrite_safety.dart';
++import 'archive_extraction.dart';
++import 'archive_input_entries.dart';
++import 'archive_creation_outcome.dart';
+ 
+ class ArchiveService {
+   /// Creates an archive or multiple separate archives.
+-  static Future<void> createArchive({
++  static Future<ArchiveCreationOutcome> createArchive({
+     required List<String> sourcePaths,
+     required String destinationDir,
+     required String archiveName,
+@@ -34,45 +36,76 @@ class ArchiveService {
+       deleteSource: deleteSource,
+     );
+     validateNewArchiveOutputPaths(destinations);
++    final createdPaths = <String>[];
++    final cleanupFailures = <ArchiveSourceCleanupFailure>[];
++    ArchiveBatchFailure? batchFailure;
++    final attemptedCleanup = <String>{};
++    Future<void> cleanSources(List<String> paths) async {
++      try {
++        validateArchiveDestinations(
++          sourcePaths: sourcePaths,
++          destinationPaths: destinations,
++          deleteSource: true,
++        );
++      } catch (error) {
++        for (final path in paths) {
++          if (attemptedCleanup.add(path)) {
++            cleanupFailures.add(ArchiveSourceCleanupFailure(path, error.toString()));
++          }
++        }
++        return;
++      }
++      for (final path in paths) {
++        if (!attemptedCleanup.add(path)) continue;
++        try {
++          await _deleteEntity(path);
++        } catch (error) {
++          cleanupFailures.add(ArchiveSourceCleanupFailure(path, error.toString()));
++        }
++      }
++    }
+     if (separateArchives) {
+       for (final path in sourcePaths) {
+         final name = p.basenameWithoutExtension(path);
+         final fullDest = p.join(destinationDir, '$name.$format');
+-        await _createSingleArchive(
+-          [path], fullDest, format, compressionLevel, password, splitSizeMB,
+-          deleteSource: deleteSource,
+-          safetySourcePaths: sourcePaths,
+-        );
+-        if (deleteSource) {
+-          validateArchiveDestinations(
+-            sourcePaths: sourcePaths,
+-            destinationPaths: destinations,
+-            deleteSource: true,
++        try {
++          createdPaths.addAll(await _createSingleArchive(
++            [path], fullDest, format, compressionLevel, password, splitSizeMB,
++            deleteSource: deleteSource,
++            safetySourcePaths: sourcePaths,
++          ));
++        } catch (error, stackTrace) {
++          // Preserve the existing first-failure exception contract. Once an
++          // archive has succeeded, return its outcome instead of losing it.
++          if (createdPaths.isEmpty) rethrow;
++          batchFailure = ArchiveBatchFailure(
++            sourcePath: path,
++            archivePath: fullDest,
++            error: error,
++            stackTrace: stackTrace,
+           );
+-          await _deleteEntity(path);
++          // No cleanup for the failed/unprocessed sources, and no rollback.
++          break;
+         }
++        if (deleteSource) await cleanSources([path]);
+       }
+     } else {
+       final fullDest = p.join(destinationDir, '$archiveName.$format');
+-      await _createSingleArchive(
++      createdPaths.addAll(await _createSingleArchive(
+         sourcePaths, fullDest, format, compressionLevel, password, splitSizeMB,
+         deleteSource: deleteSource,
+         safetySourcePaths: sourcePaths,
+-      );
+-      if (deleteSource) {
+-        validateArchiveDestinations(
+-          sourcePaths: sourcePaths,
+-          destinationPaths: destinations,
+-          deleteSource: true,
+-        );
+-        for (final path in sourcePaths) {
+-          await _deleteEntity(path);
+-        }
+-      }
++      ));
++      if (deleteSource) await cleanSources(sourcePaths);
+     }
++    return ArchiveCreationOutcome(
++      archivePaths: createdPaths,
++      sourceCleanupFailures: cleanupFailures,
++      batchFailure: batchFailure,
++    );
+   }
+ 
+-  static Future<void> _createSingleArchive(
++  static Future<List<String>> _createSingleArchive(
+     List<String> sourcePaths,
+     String destinationPath,
+     String format,
+@@ -94,7 +127,7 @@ class ArchiveService {
+     });
+   }
+ 
+-  static void _encodeArchiveTask(Map<String, dynamic> args) {
++  static List<String> _encodeArchiveTask(Map<String, dynamic> args) {
+     final sourcePaths = args['sourcePaths'] as List<String>;
+     final destinationPath = args['destinationPath'] as String;
+     final format = args['format'] as String;
+@@ -110,24 +143,8 @@ class ArchiveService {
+ 
+     final archive = Archive();
+ 
+-    for (final path in sourcePaths) {
+-      final entity = FileSystemEntity.typeSync(path);
+-      if (entity == FileSystemEntityType.file) {
+-        final file = File(path);
+-        final bytes = file.readAsBytesSync();
+-        final name = p.basename(path);
+-        archive.addFile(ArchiveFile(name, bytes.length, bytes));
+-      } else if (entity == FileSystemEntityType.directory) {
+-        final dir = Directory(path);
+-        final list = dir.listSync(recursive: true);
+-        for (final sub in list) {
+-          if (sub is File) {
+-            final relPath = p.relative(sub.path, from: p.dirname(path));
+-            final bytes = sub.readAsBytesSync();
+-            archive.addFile(ArchiveFile(relPath, bytes.length, bytes));
+-          }
+-        }
+-      }
++    for (final entry in collectArchiveInputEntries(sourcePaths)) {
++      archive.addFile(entry.read());
+     }
+ 
+     List<int>? encodedBytes;
+@@ -136,18 +153,18 @@ class ArchiveService {
+       encodedBytes = ZipEncoder(password: password?.isNotEmpty == true ? password : null)
+           .encode(archive, level: level);
+     } else if (format == 'tar') {
+-      encodedBytes = TarEncoder().encode(archive);
++      encodedBytes = encodeTarArchiveEntries(archive);
+     } else if (format == 'tar.gz') {
+-      final tarBytes = TarEncoder().encode(archive);
++      final tarBytes = encodeTarArchiveEntries(archive);
+       encodedBytes = GZipEncoder().encode(tarBytes);
+     } else if (format == 'tar.bz2') {
+-      final tarBytes = TarEncoder().encode(archive);
++      final tarBytes = encodeTarArchiveEntries(archive);
+       encodedBytes = BZip2Encoder().encode(tarBytes);
+     } else if (format == 'tar.lz4') {
+-      final tarBytes = TarEncoder().encode(archive);
++      final tarBytes = encodeTarArchiveEntries(archive);
+       encodedBytes = lz4FrameEncode(Uint8List.fromList(tarBytes));
+     } else if (format == 'tar.zst') {
+-      final tarBytes = TarEncoder().encode(archive);
++      final tarBytes = encodeTarArchiveEntries(archive);
+       encodedBytes = const ZstdEncoder().encodeBytes(Uint8List.fromList(tarBytes));
+     }
+ 
+@@ -184,9 +201,12 @@ class ArchiveService {
+             partNum++;
+           }
+           outFile.deleteSync();
++          return destinations.skip(1).toList();
+         }
+       }
++      return [destinationPath];
+     }
++    throw UnsupportedError('Unsupported archive format: $format');
+   }
+ 
+   /// Extracts an archive to the specified destination directory.
+@@ -202,215 +222,28 @@ class ArchiveService {
+     });
+   }
+ 
+-  static void _decodeArchiveTask(Map<String, dynamic> args) {
+-    String archivePath = args['archivePath'] as String;
+-    final destinationDir = args['destinationDir'] as String;
+-    final password = args['password'] as String?;
+-
+-    File? tempCombinedFile;
+-
+-    try {
+-      ArchiveFormatSupport.requireExtractable(archivePath);
+-
+-      // Check for multi-volume archive (.001)
+-      if (archivePath.endsWith('.001')) {
+-        final baseName = archivePath.substring(0, archivePath.length - 4);
+-        final tempDir = Directory.systemTemp.createTempSync('extract_part');
+-        tempCombinedFile = File(p.join(tempDir.path, 'combined_archive'));
+-        final raf = tempCombinedFile.openSync(mode: FileMode.write);
+-        int partNum = 1;
+-        while (true) {
+-          final partExt = partNum.toString().padLeft(3, '0');
+-          final partFile = File('$baseName.$partExt');
+-          if (!partFile.existsSync()) break;
+-          raf.writeFromSync(partFile.readAsBytesSync());
+-          partNum++;
+-        }
+-        raf.closeSync();
+-        archivePath = tempCombinedFile.path;
+-      }
+-
+-      final file = File(archivePath);
+-      final lowerPath = archivePath.toLowerCase();
+-
+-      // stream zip files to avoid OOM
+-      if (lowerPath.endsWith('.zip') || lowerPath.contains('.zip.')) {
+-        final inputStream = InputFileStream(archivePath);
+-        final archive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
+-        
+-        validateArchiveExtractionPlan(destinationDir, archive.files);
+-        for (final fileEntry in archive.files) {
+-          final filename = fileEntry.name;
+-          final destPath = fileEntry.isFile
+-              ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
+-              : checkedArchiveExtractionPath(destinationDir, filename);
+-          if (fileEntry.isFile) {
+-            createArchiveOutputExclusively(File(destPath), recursive: true);
+-            final outputStream = OutputFileStream(destPath);
+-            fileEntry.writeContent(outputStream);
+-            outputStream.closeSync();
+-          } else {
+-            Directory(destPath).createSync(recursive: true);
+-          }
+-        }
+-        inputStream.closeSync();
+-        return;
+-      }
+-
+-      // stream tar.gz files
+-      if (lowerPath.endsWith('.tar.gz') || lowerPath.endsWith('.tgz')) {
+-        final tempTarFile = File(p.join(Directory.systemTemp.path, 'temp_${DateTime.now().millisecondsSinceEpoch}.tar'));
+-        final inputStream = InputFileStream(archivePath);
+-        final outputStream = OutputFileStream(tempTarFile.path);
+-        GZipDecoder().decodeStream(inputStream, outputStream);
+-        inputStream.closeSync();
+-        outputStream.closeSync();
+-
+-        final tarInputStream = InputFileStream(tempTarFile.path);
+-        final archive = TarDecoder().decodeBuffer(tarInputStream);
+-        validateArchiveExtractionPlan(destinationDir, archive.files);
+-        for (final fileEntry in archive.files) {
+-          final filename = fileEntry.name;
+-          final destPath = fileEntry.isFile
+-              ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
+-              : checkedArchiveExtractionPath(destinationDir, filename);
+-          if (fileEntry.isFile) {
+-            createArchiveOutputExclusively(File(destPath), recursive: true);
+-            final outputStream = OutputFileStream(destPath);
+-            fileEntry.writeContent(outputStream);
+-            outputStream.closeSync();
+-          } else {
+-            Directory(destPath).createSync(recursive: true);
+-          }
+-        }
+-        tarInputStream.closeSync();
+-        try {
+-          tempTarFile.deleteSync();
+-        } catch (_) {}
+-        return;
+-      }
+-
+-      // stream tar files
+-      if (lowerPath.endsWith('.tar')) {
+-        final inputStream = InputFileStream(archivePath);
+-        final archive = TarDecoder().decodeBuffer(inputStream);
+-        validateArchiveExtractionPlan(destinationDir, archive.files);
+-        for (final fileEntry in archive.files) {
+-          final filename = fileEntry.name;
+-          final destPath = fileEntry.isFile
+-              ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
+-              : checkedArchiveExtractionPath(destinationDir, filename);
+-          if (fileEntry.isFile) {
+-            createArchiveOutputExclusively(File(destPath), recursive: true);
+-            final outputStream = OutputFileStream(destPath);
+-            fileEntry.writeContent(outputStream);
+-            outputStream.closeSync();
+-          } else {
+-            Directory(destPath).createSync(recursive: true);
+-          }
+-        }
+-        inputStream.closeSync();
+-        return;
+-      }
+-
+-      final bytes = file.readAsBytesSync();
+-      late Archive archive;
+-
+-      if (lowerPath.endsWith('.tar.bz2') || lowerPath.endsWith('.tbz2')) {
+-        final tarBytes = BZip2Decoder().decodeBytes(bytes);
+-        archive = TarDecoder().decodeBytes(tarBytes);
+-      } else if (lowerPath.endsWith('.tar.lz4') || lowerPath.endsWith('.tlz4')) {
+-        final tarBytes = lz4FrameDecode(bytes);
+-        archive = TarDecoder().decodeBytes(Uint8List.fromList(tarBytes));
+-      } else if (lowerPath.endsWith('.tar.zst') || lowerPath.endsWith('.tzst')) {
+-        final tarBytes = const ZstdDecoder().decodeBytes(bytes);
+-        archive = TarDecoder().decodeBytes(Uint8List.fromList(tarBytes));
+-      } else if (lowerPath.endsWith('.gz')) {
+-        final decodedBytes = GZipDecoder().decodeBytes(bytes);
+-        final name = p.basenameWithoutExtension(archivePath);
+-        final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
+-        destFile.createSync(recursive: true, exclusive: true);
+-        destFile.writeAsBytesSync(decodedBytes);
+-        return;
+-      } else if (lowerPath.endsWith('.bz2')) {
+-        final decodedBytes = BZip2Decoder().decodeBytes(bytes);
+-        final name = p.basenameWithoutExtension(archivePath);
+-        final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
+-        destFile.createSync(recursive: true, exclusive: true);
+-        destFile.writeAsBytesSync(decodedBytes);
+-        return;
+-      } else if (lowerPath.endsWith('.lz4')) {
+-        final decodedBytes = lz4FrameDecode(bytes);
+-        final name = p.basenameWithoutExtension(archivePath);
+-        final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
+-        destFile.createSync(recursive: true, exclusive: true);
+-        destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
+-        return;
+-      } else if (lowerPath.endsWith('.zst') || lowerPath.endsWith('.zstd')) {
+-        final decodedBytes = const ZstdDecoder().decodeBytes(bytes);
+-        final name = p.basenameWithoutExtension(archivePath);
+-        final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
+-        destFile.createSync(recursive: true, exclusive: true);
+-        destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
+-        return;
+-      } else {
+-        // try streaming zip for unknown extension to avoid OOM
+-        final inputStream = InputFileStream(archivePath);
+-        try {
+-          final zipArchive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
+-          validateArchiveExtractionPlan(destinationDir, zipArchive.files);
+-          for (final fileEntry in zipArchive.files) {
+-            final filename = fileEntry.name;
+-            final destPath = fileEntry.isFile
+-              ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
+-              : checkedArchiveExtractionPath(destinationDir, filename);
+-            if (fileEntry.isFile) {
+-              createArchiveOutputExclusively(File(destPath), recursive: true);
+-              final outputStream = OutputFileStream(destPath);
+-              fileEntry.writeContent(outputStream);
+-              outputStream.closeSync();
+-            } else {
+-              Directory(destPath).createSync(recursive: true);
+-            }
+-          }
+-          inputStream.closeSync();
+-          return;
+-        } catch (_) {
+-          inputStream.closeSync();
+-          archive = ZipDecoder().decodeBytes(bytes, password: password != null && password.isNotEmpty ? password : null);
+-        }
+-      }
+-
+-      validateArchiveExtractionPlan(destinationDir, archive.files);
+-      for (final fileEntry in archive) {
+-        final filename = fileEntry.name;
+-        if (fileEntry.isFile) {
+-          final data = fileEntry.content as List<int>;
+-          final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, filename));
+-          destFile.createSync(recursive: true, exclusive: true);
+-          destFile.writeAsBytesSync(data);
+-        } else {
+-          Directory(checkedArchiveExtractionPath(destinationDir, filename)).createSync(recursive: true);
+-        }
+-      }
+-    } finally {
+-      if (tempCombinedFile != null && tempCombinedFile.existsSync()) {
+-        try {
+-          tempCombinedFile.parent.deleteSync(recursive: true);
+-        } catch (_) {}
+-      }
+-    }
++  static Future<void> _decodeArchiveTask(Map<String, dynamic> args) {
++    return ArchiveExtraction.extract(
++      archivePath: args['archivePath'] as String,
++      destinationDir: args['destinationDir'] as String,
++      password: args['password'] as String?,
++    );
+   }
+ 
+   static Future<void> _deleteEntity(String path) async {
+-    try {
+-      final type = FileSystemEntity.typeSync(path);
+-      if (type == FileSystemEntityType.directory) {
+-        await Directory(path).delete(recursive: true);
+-      } else if (type == FileSystemEntityType.file) {
+-        await File(path).delete();
+-      }
+-    } catch (_) {}
++    final type = FileSystemEntity.typeSync(path);
++    if (type == FileSystemEntityType.directory) {
++      await Directory(path).delete(recursive: true);
++    } else if (type == FileSystemEntityType.file) {
++      await File(path).delete();
++    } else {
++      // notFound can also hide a metadata-access error. Without a confirmed
++      // deletion, do not report successful source cleanup.
++      throw FileSystemException(
++        'Source cleanup could not be confirmed: source missing or inaccessible',
++        path,
++      );
++    }
+   }
+ 
+   static Future<Archive?> readArchive(String archivePath, {String? password}) async {
+diff --git a/lib/services/archive_worker_lifecycle.dart b/lib/services/archive_worker_lifecycle.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..4628cc5f722b73cefe8855f0d5f011d6de1d4e02
+--- /dev/null
++++ b/lib/services/archive_worker_lifecycle.dart
+@@ -0,0 +1,83 @@
++/// Cancellation is a request until the worker's actual exit is observed.
++enum ArchiveWorkerPhase {
++  starting,
++  running,
++  cancelRequested,
++  workerExiting,
++  cancelConfirmed,
++  interrupted,
++  completed,
++  partial,
++  failed,
++}
++
++class ArchiveWorkerLifecycle {
++  ArchiveWorkerLifecycle(this.operationId);
++
++  final String operationId;
++  ArchiveWorkerPhase phase = ArchiveWorkerPhase.starting;
++  bool cancelRequested = false;
++  bool workerExitConfirmed = false;
++  bool spawnFailure = false;
++  bool workerStarted = false;
++  Map<String, dynamic>? terminalMessage;
++
++  bool get isTerminal => workerExitConfirmed || spawnFailure;
++
++  bool requestCancellation(String id) {
++    if (id != operationId ||
++        isTerminal ||
++        terminalMessage != null ||
++        cancelRequested) {
++      return false;
++    }
++    cancelRequested = true;
++    phase = ArchiveWorkerPhase.cancelRequested;
++    return true;
++  }
++
++  void workerAttached({bool willRun = true}) {
++    workerStarted = willRun;
++    if (!cancelRequested && !isTerminal) phase = ArchiveWorkerPhase.running;
++  }
++
++  void workerStopDispatched() {
++    if (cancelRequested && !isTerminal) {
++      phase = ArchiveWorkerPhase.workerExiting;
++    }
++  }
++
++  void receiveTerminal(Map<String, dynamic> message) {
++    if (isTerminal || terminalMessage != null) return;
++    terminalMessage = Map<String, dynamic>.from(message);
++  }
++
++  void confirmWorkerExit() {
++    if (isTerminal) return;
++    workerExitConfirmed = true;
++    // A worker result already sent before its exit wins over a late cancel.
++    // Exit after kill alone does NOT prove that no output was published.
++    phase = switch (terminalMessage?['status']) {
++      'completed' => ArchiveWorkerPhase.completed,
++      'partial' => ArchiveWorkerPhase.partial,
++      'cancelled' => ArchiveWorkerPhase.cancelConfirmed,
++      'error' => ArchiveWorkerPhase.failed,
++      _ =>
++        cancelRequested
++            ? (workerStarted
++                  ? ArchiveWorkerPhase.interrupted
++                  : ArchiveWorkerPhase.cancelConfirmed)
++            : ArchiveWorkerPhase.failed,
++    };
++  }
++
++  void spawnFailed(Object error) {
++    receiveTerminal({
++      'status': 'error',
++      'error': 'Worker could not start: $error',
++    });
++    // A failed spawn produced no worker. Do not invent an exit acknowledgement.
++    spawnFailure = true;
++    phase = ArchiveWorkerPhase.failed;
++  }
++}
+diff --git a/lib/services/background_archive_service.dart b/lib/services/background_archive_service.dart
+index 33d70939206dd7f7a7bf413f0ce639d5a7f00d03..427dc3b09a37f0bd49f4e17f4f823d6f02454ff1 100644
+--- a/lib/services/background_archive_service.dart
++++ b/lib/services/background_archive_service.dart
+@@ -1,5 +1,6 @@
+ import 'dart:io';
+ import 'dart:isolate';
++import 'dart:async';
+ import 'package:flutter/material.dart';
+ import 'package:flutter/services.dart';
+ import 'package:path/path.dart' as p;
+@@ -11,9 +12,12 @@ import '../providers/file_manager_provider.dart';
+ import 'package:provider/provider.dart';
+ import '../ui/widgets/background_operation_progress_dialog.dart';
+ import 'archive_path_safety.dart';
+-import 'archive_extraction_safety.dart';
+-import 'archive_format_support.dart';
+ import 'archive_no_overwrite_safety.dart';
++import 'archive_extraction.dart';
++import 'archive_worker_lifecycle.dart';
++import 'archive_operation_ownership.dart';
++import 'archive_input_entries.dart';
++import 'archive_creation_outcome.dart';
+ 
+ class BackgroundOperation {
+   final String id;
+@@ -23,6 +27,10 @@ class BackgroundOperation {
+   double progress; // 0.0 to 1.0
+   String currentFile;
+   bool isRunningInBackground;
++  ArchiveWorkerPhase phase = ArchiveWorkerPhase.starting;
++
++  bool get isCancelling => phase == ArchiveWorkerPhase.cancelRequested ||
++      phase == ArchiveWorkerPhase.workerExiting;
+ 
+   BackgroundOperation({
+     required this.id,
+@@ -35,28 +43,71 @@ class BackgroundOperation {
+   });
+ }
+ 
+-class _FileEntry {
+-  final String fullPath;
+-  final String relPath;
+-  _FileEntry(this.fullPath, this.relPath);
++abstract class ArchiveWorkerHandle {
++  void resume();
++  void kill();
++}
++
++class _IsolateWorkerHandle implements ArchiveWorkerHandle {
++  _IsolateWorkerHandle(this.isolate);
++  final Isolate isolate;
++  @override
++  void resume() {
++    final capability = isolate.pauseCapability;
++    if (capability != null) isolate.resume(capability);
++  }
++  @override
++  void kill() => isolate.kill(priority: Isolate.beforeNextEvent);
++}
++
++typedef ArchiveWorkerSpawner = Future<ArchiveWorkerHandle> Function(
++  void Function(Map<String, dynamic>) task,
++  Map<String, dynamic> arguments,
++  SendPort events,
++);
++
++class _ArchiveRun {
++  _ArchiveRun(this.lease, this.operation, this.context)
++      : lifecycle = ArchiveWorkerLifecycle(lease.id);
++
++  final ArchiveOperationLease lease;
++  final BackgroundOperation operation;
++  final BuildContext? context;
++  final ArchiveWorkerLifecycle lifecycle;
++  final ReceivePort events = ReceivePort();
++  ArchiveWorkerHandle? worker;
++  SendPort? control;
+ }
+ 
+ class BackgroundArchiveService {
+   static final BackgroundArchiveService instance = BackgroundArchiveService._();
+-  BackgroundArchiveService._() {
++  BackgroundArchiveService._() : _spawnWorker = _spawnPausedWorker {
+     _channel.setMethodCallHandler((call) async {
+       if (call.method == 'cancelOperationFromNotification') {
+-        cancelOperation();
++        handleNotificationCancellation(call.arguments);
+       }
+     });
+   }
+ 
+-  static const _channel = MethodChannel('com.rubex.nfile/notifications');
++  @visibleForTesting
++  BackgroundArchiveService.forTesting({ArchiveWorkerSpawner? spawnWorker})
++      : _spawnWorker = spawnWorker ?? _spawnPausedWorker;
+ 
++  static const _channel = MethodChannel('com.rubex.nfile/notifications');
++  final ArchiveWorkerSpawner _spawnWorker;
++  final ArchiveOperationOwnership _ownership = ArchiveOperationOwnership();
+   final ValueNotifier<BackgroundOperation?> activeOperation = ValueNotifier(null);
++  _ArchiveRun? _run;
+ 
+-  Isolate? _activeIsolate;
+-  ReceivePort? _receivePort;
++  @visibleForTesting
++  ArchiveWorkerLifecycle? lastWorkerOutcome;
++
++  static Future<ArchiveWorkerHandle> _spawnPausedWorker(
++    void Function(Map<String, dynamic>) task,
++    Map<String, dynamic> arguments,
++    SendPort events,
++  ) async => _IsolateWorkerHandle(await Isolate.spawn(task, arguments, paused: true,
++      onExit: events, onError: events, errorsAreFatal: true));
+ 
+   Future<void> startCompression({
+     required BuildContext context,
+@@ -66,208 +117,268 @@ class BackgroundArchiveService {
+     required int level,
+     String? password,
+     required bool deleteSource,
+-  }) async {
+-    final archiveName = p.basename(destinationPath);
+-    final operation = BackgroundOperation(
+-      id: 'compress_${DateTime.now().millisecondsSinceEpoch}',
+-      title: 'Compressing Files',
+-      archiveName: archiveName,
+-      isCompression: true,
+-    );
+-
+-    activeOperation.value = operation;
+-
+-    // Show progress dialog
+-    BackgroundOperationProgressDialog.show(context, this);
+-
+-    _receivePort = ReceivePort();
+-
+-    _activeIsolate = await Isolate.spawn(
+-      compressIsolateTask,
+-      {
+-        'sendPort': _receivePort!.sendPort,
+-        'sourcePaths': sourcePaths,
+-        'destinationPath': destinationPath,
+-        'format': format,
+-        'level': level,
+-        'password': password,
+-        'deleteSource': deleteSource,
+-      },
+-    );
+-
+-    _receivePort!.listen((message) {
+-      if (message is Map<String, dynamic>) {
+-        final status = message['status'] as String;
+-        if (status == 'progress') {
+-          final progress = message['progress'] as double;
+-          final currentFile = message['currentFile'] as String;
+-
+-          operation.progress = progress;
+-          operation.currentFile = currentFile;
+-          activeOperation.value = operation;
+-          // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+-          activeOperation.notifyListeners();
+-
+-          if (operation.isRunningInBackground) {
+-            _updateNotification(operation);
+-          }
+-        } else if (status == 'completed') {
+-          _onOperationComplete(context, operation, 'Archive created successfully');
+-        } else if (status == 'error') {
+-          final error = message['error'] as String;
+-          _onOperationComplete(context, operation, 'Compression failed: $error', isError: true);
+-        }
+-      }
+-    });
+-  }
++  }) => _startWorker(
++    context: context,
++    kind: 'compress',
++    archiveName: p.basename(destinationPath),
++    task: compressIsolateTask,
++    arguments: {
++      'sourcePaths': sourcePaths,
++      'destinationPath': destinationPath,
++      'format': format,
++      'level': level,
++      'password': password,
++      'deleteSource': deleteSource,
++    },
++  );
+ 
+   Future<void> startExtraction({
+     required BuildContext context,
+     required String archivePath,
+     required String destinationDir,
+     String? password,
++  }) => _startWorker(
++    context: context,
++    kind: 'extract',
++    archiveName: p.basename(archivePath),
++    task: extractIsolateTask,
++    arguments: {
++      'archivePath': archivePath,
++      'destinationDir': destinationDir,
++      'password': password,
++    },
++  );
++
++  @visibleForTesting
++  Future<void> startWorkerForTesting({
++    required void Function(Map<String, dynamic>) task,
++    Map<String, dynamic> arguments = const {},
++  }) => _startWorker(kind: 'test', archiveName: 'test',
++      task: task, arguments: arguments);
++
++  Future<void> _startWorker({
++    BuildContext? context,
++    required String kind,
++    required String archiveName,
++    required void Function(Map<String, dynamic>) task,
++    required Map<String, dynamic> arguments,
+   }) async {
+-    final archiveName = p.basename(archivePath);
++    // The lease is acquired synchronously before the first await. It is kept
++    // through pending spawn and cancellation until the worker really exits.
++    final lease = _ownership.acquire(kind);
+     final operation = BackgroundOperation(
+-      id: 'extract_${DateTime.now().millisecondsSinceEpoch}',
+-      title: 'Extracting Archive',
++      id: lease.id,
++      title: kind == 'compress' ? 'Compressing Files' : 'Extracting Archive',
+       archiveName: archiveName,
+-      isCompression: false,
++      isCompression: kind == 'compress',
+     );
+-
++    final run = _ArchiveRun(lease, operation, context);
++    _run = run;
++    run.events.listen((message) => _onWorkerEvent(run, message));
+     activeOperation.value = operation;
++    final ArchiveWorkerHandle worker;
++    try {
++      if (context != null && context.mounted) {
++        unawaited(BackgroundOperationProgressDialog.show(context, this));
++      }
++      worker = await _spawnWorker(task, {
++        ...arguments,
++        'sendPort': run.events.sendPort,
++        'operationId': lease.id,
++      }, run.events.sendPort);
++    } catch (error) {
++      if (_owns(run)) {
++        run.lifecycle.spawnFailed(error);
++        _finishExitedRun(run);
++      }
++      return;
++    }
++    // A pending-spawn cancel belongs to this run and never resumes its task.
++    run.worker = worker;
++    if (!_owns(run)) {
++      worker.kill();
++      return;
++    }
++    try {
++      run.lifecycle.workerAttached(willRun: !run.lifecycle.cancelRequested);
++      if (run.lifecycle.cancelRequested) {
++        _stopWorker(run);
++      } else {
++        worker.resume();
++        _notify(run);
++      }
++    } catch (error) {
++      // A worker handle already exists: a resume/stop failure is NOT a spawn
++      // failure and cannot release ownership before the actual onExit event.
++      if (_owns(run)) {
++        run.lifecycle.receiveTerminal({'status': 'error', 'error': 'Worker control failed: $error'});
++        run.lifecycle.phase = ArchiveWorkerPhase.workerExiting;
++        try { worker.kill(); } catch (_) {}
++        _notify(run);
++      }
++    }
++  }
+ 
+-    BackgroundOperationProgressDialog.show(context, this);
++  bool _owns(_ArchiveRun run) => identical(_run, run) && _ownership.owns(run.lease);
+ 
+-    _receivePort = ReceivePort();
++  void _notify(_ArchiveRun run) {
++    if (!_owns(run)) return;
++    run.operation.phase = run.lifecycle.phase;
++    // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
++    activeOperation.notifyListeners();
++  }
+ 
+-    _activeIsolate = await Isolate.spawn(
+-      extractIsolateTask,
+-      {
+-        'sendPort': _receivePort!.sendPort,
+-        'archivePath': archivePath,
+-        'destinationDir': destinationDir,
+-        'password': password,
+-      },
+-    );
++  void _onWorkerEvent(_ArchiveRun run, dynamic message) {
++    if (!_owns(run)) return;
++    if (message == null) {
++      run.lifecycle.confirmWorkerExit();
++      _finishExitedRun(run);
++      return;
++    }
++    if (message is List) {
++      run.lifecycle.receiveTerminal({'status': 'error',
++        'error': 'Archive worker failed: ${message.firstOrNull}'});
++      return;
++    }
++    if (message is! Map) return;
++    final event = Map<String, dynamic>.from(message);
++    final eventId = event['operationId'];
++    if (eventId != null && eventId != run.lease.id) return;
++    final status = event['status'];
++    if (status == 'control' && event['sendPort'] is SendPort) {
++      run.control = event['sendPort'] as SendPort;
++      if (run.lifecycle.cancelRequested) _stopWorker(run);
++    } else if (status == 'completed' || status == 'error' ||
++        status == 'partial' || status == 'cancelled') {
++      run.lifecycle.receiveTerminal(event);
++      // Do not close ports, clear active state, or acknowledge cancellation
++      // from a terminal message alone. The real onExit message is still due.
++    } else if (status == 'progress' && !run.lifecycle.cancelRequested) {
++      run.operation.progress = (event['progress'] as num).toDouble();
++      run.operation.currentFile = event['currentFile'] as String;
++      _notify(run);
++      if (run.operation.isRunningInBackground) unawaited(_updateNotification(run));
++    } else if (status == 'phase' && !run.lifecycle.cancelRequested) {
++      run.operation.currentFile = event['phase'] == 'publishing'
++          ? 'Publishing extracted files...' : 'Staging extracted files...';
++      _notify(run);
++    }
++  }
+ 
+-    _receivePort!.listen((message) {
+-      if (message is Map<String, dynamic>) {
+-        final status = message['status'] as String;
+-        if (status == 'progress') {
+-          final progress = message['progress'] as double;
+-          final currentFile = message['currentFile'] as String;
+-
+-          operation.progress = progress;
+-          operation.currentFile = currentFile;
+-          activeOperation.value = operation;
+-          // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+-          activeOperation.notifyListeners();
+-
+-          if (operation.isRunningInBackground) {
+-            _updateNotification(operation);
+-          }
+-        } else if (status == 'completed') {
+-          _onOperationComplete(context, operation, 'Archive extracted successfully');
+-        } else if (status == 'error') {
+-          final error = message['error'] as String;
+-          _onOperationComplete(context, operation, 'Extraction failed: $error', isError: true);
+-        }
+-      }
+-    });
++  void cancelOperation({String? operationId}) {
++    final run = _run;
++    if (run == null || !_owns(run)) return;
++    if (!run.lifecycle.requestCancellation(operationId ?? run.lease.id)) return;
++    run.operation.currentFile = 'Cancellation requested; waiting for worker exit...';
++    _notify(run);
++    if (run.worker != null) _stopWorker(run);
++    if (run.operation.isRunningInBackground) unawaited(_updateNotification(run));
+   }
+ 
+-  void cancelOperation() {
+-    _activeIsolate?.kill(priority: Isolate.beforeNextEvent);
+-    _activeIsolate = null;
+-    _receivePort?.close();
+-    _receivePort = null;
++  @visibleForTesting
++  void handleNotificationCancellation(Object? arguments) {
++    // Legacy or stale broadcasts without an exact operation identity cannot
++    // safely authorize cancellation of whichever operation happens to be active.
++    if (arguments is! Map || arguments['operationId'] is! String) return;
++    cancelOperation(operationId: arguments['operationId'] as String);
++  }
+ 
+-    final operation = activeOperation.value;
+-    if (operation != null) {
+-      _cancelNotification(operation);
+-      activeOperation.value = null;
++  void _stopWorker(_ArchiveRun run) {
++    if (!_owns(run) || !run.lifecycle.cancelRequested) return;
++    run.lifecycle.workerStopDispatched();
++    if (run.control != null) {
++      run.control!.send({'command': 'cancel', 'operationId': run.lease.id});
++    } else {
++      run.worker?.kill();
+     }
++    _notify(run);
++  }
++
++  void _finishExitedRun(_ArchiveRun run) {
++    if (!_owns(run) || !run.lifecycle.isTerminal) return;
++    run.events.close();
++    run.worker = null;
++    lastWorkerOutcome = run.lifecycle;
++    _ownership.release(run.lease);
++    _run = null;
++    activeOperation.value = null;
++    unawaited(_presentOutcome(run));
+   }
+ 
+   void runInBackground() async {
+-    final operation = activeOperation.value;
+-    if (operation == null) return;
+-
+-    final status = await Permission.notification.request();
+-    if (status.isGranted) {
+-      operation.isRunningInBackground = true;
+-      // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+-      activeOperation.notifyListeners();
+-      _updateNotification(operation);
+-    } else {
+-      operation.isRunningInBackground = true;
+-      // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+-      activeOperation.notifyListeners();
+-    }
++    final run = _run;
++    if (run == null || !_owns(run)) return;
++    await Permission.notification.request();
++    if (!_owns(run)) return;
++    run.operation.isRunningInBackground = true;
++    _notify(run);
++    await _updateNotification(run);
+   }
+ 
+-  Future<void> _updateNotification(BackgroundOperation operation) async {
+-    if (!Platform.isAndroid) return;
++  Future<void> _updateNotification(_ArchiveRun run) async {
++    if (!Platform.isAndroid || !_owns(run)) return;
+     try {
+-      final progressInt = (operation.progress * 100).toInt();
++      final operation = run.operation;
+       await _channel.invokeMethod('showProgressNotification', {
+         'id': operation.id.hashCode,
++        'operationId': operation.id,
+         'title': operation.title,
+-        'message': '${operation.archiveName} ($progressInt%)',
+-        'progress': progressInt,
++        'message': operation.isCancelling ? 'Stopping worker...' :
++            '${operation.archiveName} (${(operation.progress * 100).toInt()}%)',
++        'progress': (operation.progress * 100).toInt(),
+         'max': 100,
+-        'indeterminate': operation.progress <= 0.0,
++        'indeterminate': operation.isCancelling || operation.progress <= 0.0,
++        'canCancel': !operation.isCancelling,
+       });
+-    } catch (e) {
+-      debugPrint('Error updating notification: $e');
+-    }
++    } catch (e) { debugPrint('Error updating notification: $e'); }
+   }
+ 
+-  Future<void> _cancelNotification(BackgroundOperation operation) async {
+-    if (!Platform.isAndroid) return;
+-    try {
+-      await _channel.invokeMethod('cancelNotification', {
+-        'id': operation.id.hashCode,
+-      });
+-    } catch (_) {}
+-  }
+-
+-  void _onOperationComplete(BuildContext context, BackgroundOperation operation, String message, {bool isError = false}) async {
+-    _activeIsolate = null;
+-    _receivePort?.close();
+-    _receivePort = null;
+-
+-    if (operation.isRunningInBackground) {
+-      if (Platform.isAndroid) {
+-        final id = operation.id.hashCode;
++  Future<void> _presentOutcome(_ArchiveRun run) async {
++    // Listener reentrancy or an awaited notification/reload can start a new
++    // run. Only the latest finished run may present while the service is idle.
++    bool isLatestIdleOutcome() =>
++        _run == null && identical(lastWorkerOutcome, run.lifecycle);
++    if (!isLatestIdleOutcome()) return;
++    final phase = run.lifecycle.phase;
++    final terminal = run.lifecycle.terminalMessage;
++    final String message;
++    final Color color;
++    if (phase == ArchiveWorkerPhase.completed) {
++      message = run.operation.isCompression ? 'Archive created successfully' : 'Archive extracted successfully';
++      color = Colors.green;
++    } else if (phase == ArchiveWorkerPhase.partial) {
++      message = terminal?['message']?.toString() ??
++          'Operation partially completed; published outputs were preserved. ${terminal?['error'] ?? ''}';
++      color = Colors.orange;
++    } else if (phase == ArchiveWorkerPhase.cancelConfirmed) {
++      message = 'Cancellation confirmed after worker exit. Outputs already published were preserved.';
++      color = Colors.orange;
++    } else if (phase == ArchiveWorkerPhase.interrupted) {
++      message = 'Worker exit confirmed; operation outcome is unknown. Outputs may exist; no destination rollback was performed.';
++      color = Colors.orange;
++    } else {
++      message = 'Archive operation failed: ${terminal?['error'] ?? 'Worker exited without a result'}';
++      color = Colors.redAccent;
++    }
++    if (Platform.isAndroid && run.operation.isRunningInBackground) {
++      try {
+         await _channel.invokeMethod('showProgressNotification', {
+-          'id': id,
+-          'title': isError ? 'Operation Failed' : 'Successful',
+-          'message': isError ? 'Compression/extraction failed.' : '${operation.archiveName} processed successfully.',
+-          'progress': 100,
+-          'max': 100,
+-          'indeterminate': false,
+-        });
+-        Future.delayed(const Duration(seconds: 5), () {
+-          _channel.invokeMethod('cancelNotification', {'id': id});
++          'id': run.operation.id.hashCode,
++          'operationId': run.operation.id,
++          'title': phase == ArchiveWorkerPhase.completed ? 'Successful' : 'Archive operation finished',
++          'message': message, 'progress': 100, 'max': 100, 'indeterminate': false,
++          'canCancel': false,
+         });
+-      }
++      } catch (e) { debugPrint('Error finishing notification: $e'); }
+     }
+-
++    final context = run.context;
++    if (!isLatestIdleOutcome() || context == null || !context.mounted) return;
+     try {
+       final provider = Provider.of<FileManagerProvider>(context, listen: false);
+       await provider.loadDirectory(provider.currentPath, showLoading: false);
+     } catch (_) {}
+-
+-    ScaffoldMessenger.of(context).showSnackBar(
+-      SnackBar(
+-        content: Text(message),
+-        backgroundColor: isError ? Colors.redAccent : Colors.green,
+-      ),
+-    );
+-
+-    activeOperation.value = null;
++    if (!isLatestIdleOutcome() || !context.mounted) return;
++    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message), backgroundColor: color));
+   }
+ 
+   @visibleForTesting
+@@ -292,24 +403,7 @@ class BackgroundArchiveService {
+       validateNewArchiveOutputPaths([destinationPath]);
+       sendPort.send({'status': 'progress', 'progress': 0.0, 'currentFile': 'Scanning files...'});
+ 
+-      final allFiles = <_FileEntry>[];
+-      for (final path in sourcePaths) {
+-        final entityType = FileSystemEntity.typeSync(path);
+-        if (entityType == FileSystemEntityType.file) {
+-          allFiles.add(_FileEntry(path, p.basename(path)));
+-        } else if (entityType == FileSystemEntityType.directory) {
+-          final dir = Directory(path);
+-          if (dir.existsSync()) {
+-            final list = dir.listSync(recursive: true);
+-            for (final sub in list) {
+-              if (sub is File) {
+-                final relPath = p.relative(sub.path, from: p.dirname(path));
+-                allFiles.add(_FileEntry(sub.path, relPath));
+-              }
+-            }
+-          }
+-        }
+-      }
++      final allFiles = collectArchiveInputEntries(sourcePaths);
+ 
+       if (allFiles.isEmpty) {
+         sendPort.send({'status': 'error', 'error': 'No files found to compress'});
+@@ -326,8 +420,7 @@ class BackgroundArchiveService {
+           'currentFile': entry.relPath,
+         });
+ 
+-        final bytes = File(entry.fullPath).readAsBytesSync();
+-        archive.addFile(ArchiveFile(entry.relPath, bytes.length, bytes));
++        archive.addFile(entry.read());
+       }
+ 
+       sendPort.send({
+@@ -341,21 +434,21 @@ class BackgroundArchiveService {
+         encodedBytes = ZipEncoder(password: password?.isNotEmpty == true ? password : null)
+             .encode(archive, level: level);
+       } else if (format == 'tar') {
+-        encodedBytes = TarEncoder().encode(archive);
++        encodedBytes = encodeTarArchiveEntries(archive);
+       } else if (format == 'tar.gz') {
+-        final tarBytes = TarEncoder().encode(archive);
++        final tarBytes = encodeTarArchiveEntries(archive);
+         sendPort.send({'status': 'progress', 'progress': 0.7, 'currentFile': 'Applying GZIP compression...'});
+         encodedBytes = GZipEncoder().encode(tarBytes);
+       } else if (format == 'tar.bz2') {
+-        final tarBytes = TarEncoder().encode(archive);
++        final tarBytes = encodeTarArchiveEntries(archive);
+         sendPort.send({'status': 'progress', 'progress': 0.7, 'currentFile': 'Applying BZIP2 compression...'});
+         encodedBytes = BZip2Encoder().encode(tarBytes);
+       } else if (format == 'tar.lz4') {
+-        final tarBytes = TarEncoder().encode(archive);
++        final tarBytes = encodeTarArchiveEntries(archive);
+         sendPort.send({'status': 'progress', 'progress': 0.7, 'currentFile': 'Applying LZ4 compression...'});
+         encodedBytes = lz4FrameEncode(Uint8List.fromList(tarBytes));
+       } else if (format == 'tar.zst') {
+-        final tarBytes = TarEncoder().encode(archive);
++        final tarBytes = encodeTarArchiveEntries(archive);
+         sendPort.send({'status': 'progress', 'progress': 0.7, 'currentFile': 'Applying ZSTD compression...'});
+         encodedBytes = const ZstdEncoder().encodeBytes(Uint8List.fromList(tarBytes));
+       }
+@@ -381,30 +474,55 @@ class BackgroundArchiveService {
+       createArchiveOutputExclusively(outFile, recursive: true);
+       outFile.writeAsBytesSync(encodedBytes);
+ 
++      final cleanupFailures = <ArchiveSourceCleanupFailure>[];
+       if (deleteSource) {
+-        validateArchiveDestinations(
+-          sourcePaths: sourcePaths,
+-          destinationPaths: [destinationPath],
+-          deleteSource: true,
+-        );
+-        for (final path in sourcePaths) {
+-          final type = FileSystemEntity.typeSync(path);
+-          if (type == FileSystemEntityType.directory) {
+-            Directory(path).deleteSync(recursive: true);
+-          } else if (type == FileSystemEntityType.file) {
+-            File(path).deleteSync();
++        try {
++          validateArchiveDestinations(
++            sourcePaths: sourcePaths,
++            destinationPaths: [destinationPath],
++            deleteSource: true,
++          );
++        } catch (error) {
++          cleanupFailures.addAll(sourcePaths.toSet().map(
++            (path) => ArchiveSourceCleanupFailure(path, error.toString()),
++          ));
++        }
++        if (cleanupFailures.isEmpty) {
++          for (final path in sourcePaths.toSet()) {
++            try {
++              final type = FileSystemEntity.typeSync(path);
++              if (type == FileSystemEntityType.directory) {
++                Directory(path).deleteSync(recursive: true);
++              } else if (type == FileSystemEntityType.file) {
++                File(path).deleteSync();
++              } else {
++                // typeSync may return notFound for inaccessible metadata too.
++                // Preserve the archive and report unconfirmed cleanup.
++                throw FileSystemException(
++                  'Source cleanup could not be confirmed: source missing or inaccessible',
++                  path,
++                );
++              }
++            } catch (error) {
++              cleanupFailures.add(ArchiveSourceCleanupFailure(path, error.toString()));
++            }
+           }
+         }
+       }
+ 
++      final outcome = ArchiveCreationOutcome(
++        archivePaths: [destinationPath],
++        sourceCleanupFailures: cleanupFailures,
++      );
++
+       sendPort.send({
+         'status': 'progress',
+         'progress': 1.0,
+-        'currentFile': 'Archive created successfully',
++        'currentFile': outcome.message,
+       });
+       await Future.delayed(const Duration(milliseconds: 300));
+ 
+-      sendPort.send({'status': 'completed'});
++      sendPort.send(outcome.toWorkerMessage());
+     } catch (e) {
+       sendPort.send({'status': 'error', 'error': e.toString()});
+     }
+@@ -413,255 +531,38 @@ class BackgroundArchiveService {
+   @visibleForTesting
+   static Future<void> extractIsolateTask(Map<String, dynamic> args) async {
+     final sendPort = args['sendPort'] as SendPort;
+-    final archivePath = args['archivePath'] as String;
+-    final destinationDir = args['destinationDir'] as String;
+-    final password = args['password'] as String?;
+-
+-    try {
+-      ArchiveFormatSupport.requireExtractable(archivePath, background: true);
+-      sendPort.send({'status': 'progress', 'progress': 0.0, 'currentFile': 'Reading archive...'});
+-
+-      final file = File(archivePath);
+-      if (!file.existsSync()) {
+-        sendPort.send({'status': 'error', 'error': 'Archive file not found'});
+-        return;
+-      }
+-      final lowerPath = archivePath.toLowerCase();
+-
+-      // stream zip files to avoid OOM
+-      if (lowerPath.endsWith('.zip') || lowerPath.contains('.zip.')) {
+-        sendPort.send({'status': 'progress', 'progress': 0.1, 'currentFile': 'Opening zip...'});
+-        final inputStream = InputFileStream(archivePath);
+-        final archive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
+-        validateArchiveExtractionPlan(destinationDir, archive.files);
+-        final totalFiles = archive.length;
+-        
+-        for (int i = 0; i < totalFiles; i++) {
+-          final fileEntry = archive[i];
+-          final progress = 0.2 + (i / totalFiles) * 0.8;
+-          sendPort.send({
+-            'status': 'progress',
+-            'progress': progress,
+-            'currentFile': fileEntry.name,
+-          });
+-
+-          final filename = fileEntry.name;
+-          final destPath = fileEntry.isFile
+-              ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
+-              : checkedArchiveExtractionPath(destinationDir, filename);
+-          if (fileEntry.isFile) {
+-            createArchiveOutputExclusively(File(destPath), recursive: true);
+-            final outputStream = OutputFileStream(destPath);
+-            fileEntry.writeContent(outputStream);
+-            outputStream.closeSync();
+-          } else {
+-            Directory(destPath).createSync(recursive: true);
+-          }
+-        }
+-        inputStream.closeSync();
+-        sendPort.send({'status': 'completed'});
+-        return;
++    final control = ReceivePort();
++    var cancelled = false;
++    control.listen((message) {
++      if (message is Map && message['command'] == 'cancel' &&
++          message['operationId'] == args['operationId']) {
++        cancelled = true;
+       }
+-
+-      // stream tar.gz files
+-      if (lowerPath.endsWith('.tar.gz') || lowerPath.endsWith('.tgz')) {
+-        sendPort.send({'status': 'progress', 'progress': 0.1, 'currentFile': 'Decompressing gzip...'});
+-        final tempTarFile = File(p.join(Directory.systemTemp.path, 'temp_${DateTime.now().millisecondsSinceEpoch}.tar'));
+-        final inputStream = InputFileStream(archivePath);
+-        final outputStream = OutputFileStream(tempTarFile.path);
+-        GZipDecoder().decodeStream(inputStream, outputStream);
+-        inputStream.closeSync();
+-        outputStream.closeSync();
+-
+-        sendPort.send({'status': 'progress', 'progress': 0.3, 'currentFile': 'Extracting tar...'});
+-        final tarInputStream = InputFileStream(tempTarFile.path);
+-        final archive = TarDecoder().decodeBuffer(tarInputStream);
+-        validateArchiveExtractionPlan(destinationDir, archive.files);
+-        final totalFiles = archive.length;
+-        
+-        for (int i = 0; i < totalFiles; i++) {
+-          final fileEntry = archive[i];
+-          final progress = 0.3 + (i / totalFiles) * 0.7;
+-          sendPort.send({
+-            'status': 'progress',
+-            'progress': progress,
+-            'currentFile': fileEntry.name,
+-          });
+-
+-          final filename = fileEntry.name;
+-          final destPath = fileEntry.isFile
+-              ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
+-              : checkedArchiveExtractionPath(destinationDir, filename);
+-          if (fileEntry.isFile) {
+-            createArchiveOutputExclusively(File(destPath), recursive: true);
+-            final outputStream = OutputFileStream(destPath);
+-            fileEntry.writeContent(outputStream);
+-            outputStream.closeSync();
+-          } else {
+-            Directory(destPath).createSync(recursive: true);
+-          }
+-        }
+-        tarInputStream.closeSync();
+-        try {
+-          tempTarFile.deleteSync();
+-        } catch (_) {}
+-        sendPort.send({'status': 'completed'});
+-        return;
+-      }
+-
+-      // stream tar files
+-      if (lowerPath.endsWith('.tar')) {
+-        sendPort.send({'status': 'progress', 'progress': 0.1, 'currentFile': 'Opening tar...'});
+-        final inputStream = InputFileStream(archivePath);
+-        final archive = TarDecoder().decodeBuffer(inputStream);
+-        validateArchiveExtractionPlan(destinationDir, archive.files);
+-        final totalFiles = archive.length;
+-        
+-        for (int i = 0; i < totalFiles; i++) {
+-          final fileEntry = archive[i];
+-          final progress = 0.2 + (i / totalFiles) * 0.8;
+-          sendPort.send({
+-            'status': 'progress',
+-            'progress': progress,
+-            'currentFile': fileEntry.name,
+-          });
+-
+-          final filename = fileEntry.name;
+-          final destPath = fileEntry.isFile
+-              ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
+-              : checkedArchiveExtractionPath(destinationDir, filename);
+-          if (fileEntry.isFile) {
+-            createArchiveOutputExclusively(File(destPath), recursive: true);
+-            final outputStream = OutputFileStream(destPath);
+-            fileEntry.writeContent(outputStream);
+-            outputStream.closeSync();
+-          } else {
+-            Directory(destPath).createSync(recursive: true);
+-          }
+-        }
+-        inputStream.closeSync();
+-        sendPort.send({'status': 'completed'});
+-        return;
+-      }
+-
+-      final bytes = file.readAsBytesSync();
+-      late Archive archive;
+-      sendPort.send({'status': 'progress', 'progress': 0.1, 'currentFile': 'Decompressing archive...'});
+-
+-      if (lowerPath.endsWith('.tar.bz2') || lowerPath.endsWith('.tbz2')) {
+-        final tarBytes = BZip2Decoder().decodeBytes(bytes);
+-        archive = TarDecoder().decodeBytes(tarBytes);
+-      } else if (lowerPath.endsWith('.tar.lz4') || lowerPath.endsWith('.tlz4')) {
+-        final tarBytes = lz4FrameDecode(bytes);
+-        archive = TarDecoder().decodeBytes(Uint8List.fromList(tarBytes));
+-      } else if (lowerPath.endsWith('.tar.zst') || lowerPath.endsWith('.tzst')) {
+-        final tarBytes = const ZstdDecoder().decodeBytes(bytes);
+-        archive = TarDecoder().decodeBytes(Uint8List.fromList(tarBytes));
+-      } else if (lowerPath.endsWith('.gz')) {
+-        final decodedBytes = GZipDecoder().decodeBytes(bytes);
+-        final name = p.basenameWithoutExtension(archivePath);
+-        final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
+-        destFile.createSync(recursive: true, exclusive: true);
+-        destFile.writeAsBytesSync(decodedBytes);
+-        sendPort.send({'status': 'completed'});
+-        return;
+-      } else if (lowerPath.endsWith('.bz2')) {
+-        final decodedBytes = BZip2Decoder().decodeBytes(bytes);
+-        final name = p.basenameWithoutExtension(archivePath);
+-        final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
+-        destFile.createSync(recursive: true, exclusive: true);
+-        destFile.writeAsBytesSync(decodedBytes);
+-        sendPort.send({'status': 'completed'});
+-        return;
+-      } else if (lowerPath.endsWith('.lz4')) {
+-        final decodedBytes = lz4FrameDecode(bytes);
+-        final name = p.basenameWithoutExtension(archivePath);
+-        final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
+-        destFile.createSync(recursive: true, exclusive: true);
+-        destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
+-        sendPort.send({'status': 'completed'});
+-        return;
+-      } else if (lowerPath.endsWith('.zst') || lowerPath.endsWith('.zstd')) {
+-        final decodedBytes = const ZstdDecoder().decodeBytes(bytes);
+-        final name = p.basenameWithoutExtension(archivePath);
+-        final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
+-        destFile.createSync(recursive: true, exclusive: true);
+-        destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
+-        sendPort.send({'status': 'completed'});
+-        return;
+-      } else {
+-        // try streaming zip for unknown extension to avoid OOM
+-        sendPort.send({'status': 'progress', 'progress': 0.1, 'currentFile': 'Opening archive...'});
+-        final inputStream = InputFileStream(archivePath);
+-        try {
+-          final zipArchive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
+-          validateArchiveExtractionPlan(destinationDir, zipArchive.files);
+-          final totalFiles = zipArchive.length;
+-          
+-          for (int i = 0; i < totalFiles; i++) {
+-            final fileEntry = zipArchive[i];
+-            final progress = 0.2 + (i / totalFiles) * 0.8;
+-            sendPort.send({
+-              'status': 'progress',
+-              'progress': progress,
+-              'currentFile': fileEntry.name,
+-            });
+-
+-            final filename = fileEntry.name;
+-            final destPath = fileEntry.isFile
+-              ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
+-              : checkedArchiveExtractionPath(destinationDir, filename);
+-            if (fileEntry.isFile) {
+-              createArchiveOutputExclusively(File(destPath), recursive: true);
+-              final outputStream = OutputFileStream(destPath);
+-              fileEntry.writeContent(outputStream);
+-              outputStream.closeSync();
+-            } else {
+-              Directory(destPath).createSync(recursive: true);
+-            }
+-          }
+-          inputStream.closeSync();
+-          sendPort.send({'status': 'completed'});
+-          return;
+-        } catch (_) {
+-          inputStream.closeSync();
+-          archive = ZipDecoder().decodeBytes(bytes, password: password != null && password.isNotEmpty ? password : null);
+-        }
+-      }
+-
+-      sendPort.send({'status': 'progress', 'progress': 0.3, 'currentFile': 'Extracting files...'});
+-
+-      validateArchiveExtractionPlan(destinationDir, archive.files);
+-      final totalFiles = archive.length;
+-      for (int i = 0; i < totalFiles; i++) {
+-        final fileEntry = archive[i];
+-        final progress = 0.3 + (i / totalFiles) * 0.7;
+-        sendPort.send({
+-          'status': 'progress',
+-          'progress': progress,
+-          'currentFile': fileEntry.name,
+-        });
+-
+-        final filename = fileEntry.name;
+-        if (fileEntry.isFile) {
+-          final data = fileEntry.content as List<int>;
+-          final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, filename));
+-          destFile.createSync(recursive: true, exclusive: true);
+-          destFile.writeAsBytesSync(data);
+-        } else {
+-          Directory(checkedArchiveExtractionPath(destinationDir, filename)).createSync(recursive: true);
+-        }
+-      }
+-
++    });
++    sendPort.send({'status': 'control', 'sendPort': control.sendPort});
++    try {
++      await ArchiveExtraction.extract(
++        archivePath: args['archivePath'] as String,
++        destinationDir: args['destinationDir'] as String,
++        password: args['password'] as String?,
++        background: true,
++        isCancelled: () => cancelled,
++        onBoundary: (phase, published) async {
++          sendPort.send({'status': 'phase', 'phase': phase, 'publishedPaths': published});
++        },
++      );
++      sendPort.send({'status': 'completed'});
++    } on ArchiveExtractionFailure catch (error) {
+       sendPort.send({
+-        'status': 'progress',
+-        'progress': 1.0,
+-        'currentFile': 'Archive extracted successfully',
++        'status': error.isPartial ? 'partial' : error.cancelled ? 'cancelled' : 'error',
++        'error': error.toString(),
++        'publishedPaths': error.publishedPaths,
++        'cancelled': error.cancelled,
+       });
+-      await Future.delayed(const Duration(milliseconds: 300));
+-      sendPort.send({'status': 'completed'});
+-    } catch (e) {
+-      sendPort.send({'status': 'error', 'error': e.toString()});
++    } catch (error) {
++      sendPort.send({'status': 'error', 'error': error.toString()});
++    } finally {
++      control.close();
+     }
+   }
+ }
+diff --git a/lib/ui/widgets/background_operation_progress_dialog.dart b/lib/ui/widgets/background_operation_progress_dialog.dart
+index ef1f809d8c098774e6fd540c72c8bccc392a45bd..b6ae6da76fd362efa449b9a07645301eb619242e 100644
+--- a/lib/ui/widgets/background_operation_progress_dialog.dart
++++ b/lib/ui/widgets/background_operation_progress_dialog.dart
+@@ -196,11 +196,11 @@ class BackgroundOperationProgressDialog extends StatelessWidget {
+                           children: [
+                             Expanded(
+                               child: OutlinedButton.icon(
+-                                onPressed: () {
+-                                  service.cancelOperation();
++                                onPressed: operation.isCancelling ? null : () {
++                                  service.cancelOperation(operationId: operation.id);
+                                 },
+                                 icon: const Icon(Broken.close_square, size: 18),
+-                                label: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.bold)),
++                                label: Text(operation.isCancelling ? 'Stopping...' : 'Cancel', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                 style: OutlinedButton.styleFrom(
+                                   foregroundColor: Colors.redAccent,
+                                   side: BorderSide(color: Colors.redAccent.withOpacity(0.4)),
+diff --git a/lib/ui/widgets/drag_drop_action_dialog.dart b/lib/ui/widgets/drag_drop_action_dialog.dart
+index 081a391772c0e0798f8b23bc76dcd174dfb6b89b..59db204d4d3092e35a7c3834086b5f7ddb43159e 100644
+--- a/lib/ui/widgets/drag_drop_action_dialog.dart
++++ b/lib/ui/widgets/drag_drop_action_dialog.dart
+@@ -614,7 +614,7 @@ class _DragDropActionDialogState extends State<DragDropActionDialog> {
+         provider.notifyListeners();
+ 
+         try {
+-          await ArchiveService.createArchive(
++          final outcome = await ArchiveService.createArchive(
+             sourcePaths: widget.sourcePaths,
+             destinationDir: _selectedDestPath,
+             archiveName: res.archiveName,
+@@ -629,7 +629,10 @@ class _DragDropActionDialogState extends State<DragDropActionDialog> {
+           if (stableContext.mounted) {
+             ScaffoldMessenger.of(stableContext).showSnackBar(
+               SnackBar(
+-                content: Text('Archive "${res.archiveName}.${res.format}" created successfully!'),
++                content: Text(outcome.isPartial
++                    ? outcome.message
++                    : 'Archive "${res.archiveName}.${res.format}" created successfully!'),
++                backgroundColor: outcome.isPartial ? Colors.orange : null,
+                 behavior: SnackBarBehavior.floating,
+               ),
+             );
+diff --git a/test/archive_cancellation_acknowledgement_test.dart b/test/archive_cancellation_acknowledgement_test.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..5eff5b88fc24236eb91203a7db16a299bb56cbef
+--- /dev/null
++++ b/test/archive_cancellation_acknowledgement_test.dart
+@@ -0,0 +1,461 @@
++import 'dart:async';
++import 'dart:isolate';
++
++import 'package:flutter/widgets.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:nfile/services/archive_operation_ownership.dart';
++import 'package:nfile/services/archive_worker_lifecycle.dart';
++import 'package:nfile/services/background_archive_service.dart';
++
++class _FakeWorker implements ArchiveWorkerHandle {
++  var kills = 0;
++  bool failResume = false;
++  @override
++  void resume() {
++    if (failResume) throw StateError("injected resume failure");
++  }
++
++  @override
++  void kill() => kills++;
++  @override
++  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
++}
++
++class _PendingSpawn {
++  _PendingSpawn(this.events);
++  final SendPort events;
++  final result = Completer<ArchiveWorkerHandle>();
++  final worker = _FakeWorker();
++  void attach() => result.complete(worker);
++  void send(Map<String, dynamic> event) => events.send(event);
++  void exit() => events.send(null);
++}
++
++class _Spawner {
++  final pending = <_PendingSpawn>[];
++  Future<ArchiveWorkerHandle> spawn(
++    void Function(Map<String, dynamic>) task,
++    Map<String, dynamic> arguments,
++    SendPort events,
++  ) {
++    final request = _PendingSpawn(events);
++    pending.add(request);
++    return request.result.future;
++  }
++}
++
++class _UnmountedContext implements BuildContext {
++  @override
++  bool get mounted => false;
++  @override
++  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
++}
++
++void _unusedTask(Map<String, dynamic> args) {}
++
++void _cooperativeWorker(Map<String, dynamic> args) {
++  final events = args['sendPort'] as SendPort;
++  final ready = args['readyPort'] as SendPort;
++  final control = ReceivePort();
++  events.send({'status': 'control', 'sendPort': control.sendPort});
++  events.send({
++    'status': 'progress',
++    'progress': 0.0,
++    'currentFile': 'ready-for-cancel',
++  });
++  ready.send(true);
++  control.listen((message) {
++    if (message is Map && message['command'] == 'cancel') {
++      events.send({'status': 'cancelled'});
++      control.close();
++    }
++  });
++}
++
++void _completedWorker(Map<String, dynamic> args) {
++  (args['sendPort'] as SendPort).send({'status': 'completed'});
++}
++
++Future<void> _drainEvents() => Future<void>.delayed(Duration.zero);
++
++Future<void> _untilExited(BackgroundArchiveService service) {
++  if (service.activeOperation.value == null) return Future.value();
++  final done = Completer<void>();
++  void changed() {
++    if (service.activeOperation.value == null && !done.isCompleted) {
++      done.complete();
++    }
++  }
++
++  service.activeOperation.addListener(changed);
++  return done.future
++      .timeout(const Duration(seconds: 15))
++      .whenComplete(() => service.activeOperation.removeListener(changed));
++}
++
++void main() {
++  TestWidgetsFlutterBinding.ensureInitialized();
++
++  test(
++    'cancel requested, stop dispatched, and exit confirmed are distinct',
++    () {
++      final lifecycle = ArchiveWorkerLifecycle('A');
++      expect(lifecycle.requestCancellation('A'), isTrue);
++      expect(lifecycle.phase, ArchiveWorkerPhase.cancelRequested);
++      expect(lifecycle.workerExitConfirmed, isFalse);
++      lifecycle.workerAttached(willRun: false);
++      lifecycle.workerStopDispatched();
++      expect(lifecycle.phase, ArchiveWorkerPhase.workerExiting);
++      expect(lifecycle.workerExitConfirmed, isFalse);
++      lifecycle.confirmWorkerExit();
++      expect(lifecycle.phase, ArchiveWorkerPhase.cancelConfirmed);
++      expect(lifecycle.workerExitConfirmed, isTrue);
++    },
++  );
++
++  test('wrong identity and post-completion cancel are rejected', () {
++    final lifecycle = ArchiveWorkerLifecycle('A');
++    expect(lifecycle.requestCancellation('stale'), isFalse);
++    lifecycle.receiveTerminal({'status': 'completed'});
++    expect(lifecycle.requestCancellation('A'), isFalse);
++    expect(lifecycle.workerExitConfirmed, isFalse);
++    lifecycle.confirmWorkerExit();
++    expect(lifecycle.phase, ArchiveWorkerPhase.completed);
++  });
++
++  test(
++    'exit after running cancellation without worker result is uncertain',
++    () {
++      final lifecycle = ArchiveWorkerLifecycle('A')..workerAttached();
++      lifecycle.requestCancellation('A');
++      lifecycle.workerStopDispatched();
++      lifecycle.confirmWorkerExit();
++      expect(lifecycle.workerExitConfirmed, isTrue);
++      expect(lifecycle.phase, ArchiveWorkerPhase.interrupted);
++      expect(lifecycle.terminalMessage, isNull);
++    },
++  );
++
++  test('unexpected worker exit is a failure, not success or cancellation', () {
++    final lifecycle = ArchiveWorkerLifecycle('A')..workerAttached();
++    lifecycle.confirmWorkerExit();
++    expect(lifecycle.phase, ArchiveWorkerPhase.failed);
++  });
++
++  test(
++    'pending spawn cancellation retains active operation until onExit',
++    () async {
++      final spawner = _Spawner();
++      final service = BackgroundArchiveService.forTesting(
++        spawnWorker: spawner.spawn,
++      );
++      final starting = service.startWorkerForTesting(task: _unusedTask);
++      final operation = service.activeOperation.value!;
++      service.cancelOperation(operationId: operation.id);
++      expect(operation.phase, ArchiveWorkerPhase.cancelRequested);
++      expect(service.activeOperation.value, same(operation));
++      final pending = spawner.pending.single;
++      pending.attach();
++      await starting;
++      expect(pending.worker.kills, 1);
++      expect(operation.phase, ArchiveWorkerPhase.workerExiting);
++      expect(service.lastWorkerOutcome, isNull);
++      expect(service.activeOperation.value, same(operation));
++      final exited = _untilExited(service);
++      pending.exit();
++      await exited;
++      expect(
++        service.lastWorkerOutcome!.phase,
++        ArchiveWorkerPhase.cancelConfirmed,
++      );
++    },
++  );
++
++  test(
++    'running cancel does not close event port or acknowledge before exit',
++    () async {
++      final spawner = _Spawner();
++      final service = BackgroundArchiveService.forTesting(
++        spawnWorker: spawner.spawn,
++      );
++      final starting = service.startWorkerForTesting(task: _unusedTask);
++      final pending = spawner.pending.single..attach();
++      await starting;
++      service.cancelOperation();
++      expect(pending.worker.kills, 1);
++      expect(service.activeOperation.value!.isCancelling, isTrue);
++      pending.send({
++        'status': 'progress',
++        'progress': 0.9,
++        'currentFile': 'late',
++      });
++      await _drainEvents();
++      expect(service.activeOperation.value!.progress, 0);
++      expect(service.lastWorkerOutcome, isNull);
++      final exited = _untilExited(service);
++      pending.exit();
++      await exited;
++      expect(service.lastWorkerOutcome!.workerExitConfirmed, isTrue);
++    },
++  );
++
++  for (final status in ['completed', 'partial', 'error']) {
++    test(
++      '$status terminal result wins late cancellation but still waits exit',
++      () async {
++        final spawner = _Spawner();
++        final service = BackgroundArchiveService.forTesting(
++          spawnWorker: spawner.spawn,
++        );
++        final starting = service.startWorkerForTesting(task: _unusedTask);
++        final pending = spawner.pending.single..attach();
++        await starting;
++        pending.send({'status': status, 'message': 'result', 'error': 'fault'});
++        await _drainEvents();
++        service.cancelOperation();
++        expect(pending.worker.kills, 0);
++        expect(service.activeOperation.value, isNotNull);
++        final exited = _untilExited(service);
++        pending.exit();
++        await exited;
++        expect(
++          service.lastWorkerOutcome!.phase,
++          {
++            'completed': ArchiveWorkerPhase.completed,
++            'partial': ArchiveWorkerPhase.partial,
++            'error': ArchiveWorkerPhase.failed,
++          }[status],
++        );
++      },
++    );
++  }
++
++  test(
++    'completion racing an already requested cancel is not falsely cancelled',
++    () async {
++      final spawner = _Spawner();
++      final service = BackgroundArchiveService.forTesting(
++        spawnWorker: spawner.spawn,
++      );
++      final starting = service.startWorkerForTesting(task: _unusedTask);
++      final pending = spawner.pending.single..attach();
++      await starting;
++      service.cancelOperation();
++      pending.send({'status': 'completed'});
++      final exited = _untilExited(service);
++      pending.exit();
++      await exited;
++      expect(service.lastWorkerOutcome!.phase, ArchiveWorkerPhase.completed);
++    },
++  );
++
++  test(
++    'public compression/extraction starts reject reentrancy through cancelling',
++    () async {
++      final spawner = _Spawner();
++      final service = BackgroundArchiveService.forTesting(
++        spawnWorker: spawner.spawn,
++      );
++      final context = _UnmountedContext();
++      final first = service.startCompression(
++        context: context,
++        sourcePaths: ['/source'],
++        destinationPath: '/output.zip',
++        format: 'zip',
++        level: 6,
++        deleteSource: false,
++      );
++      await expectLater(
++        service.startExtraction(
++          context: context,
++          archivePath: '/input.zip',
++          destinationDir: '/output',
++        ),
++        throwsA(isA<ArchiveOperationBusyException>()),
++      );
++      expect(spawner.pending.length, 1);
++      service.cancelOperation();
++      await expectLater(
++        service.startWorkerForTesting(task: _unusedTask),
++        throwsA(isA<ArchiveOperationBusyException>()),
++      );
++      final pending = spawner.pending.single..attach();
++      await first;
++      await expectLater(
++        service.startWorkerForTesting(task: _unusedTask),
++        throwsA(isA<ArchiveOperationBusyException>()),
++      );
++      final exited = _untilExited(service);
++      pending.exit();
++      await exited;
++      final next = service.startWorkerForTesting(task: _unusedTask);
++      final second = spawner.pending.last..attach();
++      await next;
++      final secondExited = _untilExited(service);
++      second.send({'status': 'completed'});
++      second.exit();
++      await secondExited;
++    },
++  );
++
++  test(
++    'old progress, completion, exit and notification cannot affect new operation',
++    () async {
++      final spawner = _Spawner();
++      final service = BackgroundArchiveService.forTesting(
++        spawnWorker: spawner.spawn,
++      );
++      final first = service.startWorkerForTesting(task: _unusedTask);
++      final old = spawner.pending.single..attach();
++      await first;
++      final oldId = service.activeOperation.value!.id;
++      final firstExited = _untilExited(service);
++      old.send({'status': 'completed'});
++      old.exit();
++      await firstExited;
++      final second = service.startWorkerForTesting(task: _unusedTask);
++      final current = spawner.pending.last..attach();
++      await second;
++      final newOperation = service.activeOperation.value!;
++      old.send({'status': 'progress', 'progress': 1.0, 'currentFile': 'stale'});
++      old.send({'status': 'completed'});
++      old.exit();
++      service.handleNotificationCancellation(null);
++      service.handleNotificationCancellation({'operationId': oldId});
++      current.send({'status': 'completed', 'operationId': oldId});
++      await _drainEvents();
++      expect(service.activeOperation.value, same(newOperation));
++      expect(newOperation.progress, 0);
++      expect(current.worker.kills, 0);
++      service.handleNotificationCancellation({'operationId': newOperation.id});
++      expect(current.worker.kills, 1);
++      final exited = _untilExited(service);
++      current.exit();
++      await exited;
++    },
++  );
++
++  test('exit before spawn future resolves cannot clear a newer run', () async {
++    final spawner = _Spawner();
++    final service = BackgroundArchiveService.forTesting(
++      spawnWorker: spawner.spawn,
++    );
++    final first = service.startWorkerForTesting(task: _unusedTask);
++    final old = spawner.pending.single;
++    final oldExited = _untilExited(service);
++    old.exit();
++    await oldExited;
++    final second = service.startWorkerForTesting(task: _unusedTask);
++    final current = spawner.pending.last..attach();
++    await second;
++    final active = service.activeOperation.value;
++    old.attach();
++    await first;
++    expect(old.worker.kills, 1);
++    expect(current.worker.kills, 0);
++    expect(service.activeOperation.value, same(active));
++    final exited = _untilExited(service);
++    current.send({'status': 'completed'});
++    current.exit();
++    await exited;
++  });
++
++  test(
++    'post-spawn resume failure retains ownership until actual exit',
++    () async {
++      final spawner = _Spawner();
++      final service = BackgroundArchiveService.forTesting(
++        spawnWorker: spawner.spawn,
++      );
++      final starting = service.startWorkerForTesting(task: _unusedTask);
++      final pending = spawner.pending.single;
++      pending.worker.failResume = true;
++      pending.attach();
++      await starting;
++      expect(pending.worker.kills, 1);
++      expect(service.activeOperation.value, isNotNull);
++      expect(service.lastWorkerOutcome, isNull);
++      await expectLater(
++        service.startWorkerForTesting(task: _unusedTask),
++        throwsA(isA<ArchiveOperationBusyException>()),
++      );
++      final exited = _untilExited(service);
++      pending.exit();
++      await exited;
++      expect(service.lastWorkerOutcome!.phase, ArchiveWorkerPhase.failed);
++      expect(service.lastWorkerOutcome!.workerExitConfirmed, isTrue);
++    },
++  );
++
++  test(
++    'spawn failure releases only the failed run and reports failure',
++    () async {
++      final spawner = _Spawner();
++      final service = BackgroundArchiveService.forTesting(
++        spawnWorker: spawner.spawn,
++      );
++      final start = service.startWorkerForTesting(task: _unusedTask);
++      spawner.pending.single.result.completeError(
++        StateError('injected spawn failure'),
++      );
++      await start;
++      expect(service.activeOperation.value, isNull);
++      expect(service.lastWorkerOutcome!.phase, ArchiveWorkerPhase.failed);
++      expect(service.lastWorkerOutcome!.workerExitConfirmed, isFalse);
++    },
++  );
++
++  test(
++    'real isolate cooperative cancellation confirms actual worker exit',
++    () async {
++      final service = BackgroundArchiveService.forTesting();
++      final ready = ReceivePort();
++      try {
++        await service.startWorkerForTesting(
++          task: _cooperativeWorker,
++          arguments: {'readyPort': ready.sendPort},
++        );
++        await ready.first.timeout(const Duration(seconds: 15));
++        if (service.activeOperation.value!.currentFile != 'ready-for-cancel') {
++          final controlReceived = Completer<void>();
++          void changed() {
++            if (service.activeOperation.value?.currentFile ==
++                    'ready-for-cancel' &&
++                !controlReceived.isCompleted) {
++              controlReceived.complete();
++            }
++          }
++
++          service.activeOperation.addListener(changed);
++          await controlReceived.future.timeout(const Duration(seconds: 15));
++          service.activeOperation.removeListener(changed);
++        }
++        final exited = _untilExited(service);
++        service.cancelOperation();
++        expect(service.activeOperation.value, isNotNull);
++        expect(service.activeOperation.value!.isCancelling, isTrue);
++        await exited;
++        expect(
++          service.lastWorkerOutcome!.phase,
++          ArchiveWorkerPhase.cancelConfirmed,
++        );
++        expect(
++          service.lastWorkerOutcome!.terminalMessage!['status'],
++          'cancelled',
++        );
++      } finally {
++        ready.close();
++      }
++    },
++  );
++
++  test('real isolate completion is released only after onExit', () async {
++    final service = BackgroundArchiveService.forTesting();
++    final starting = service.startWorkerForTesting(task: _completedWorker);
++    final exited = _untilExited(service);
++    await starting;
++    await exited;
++    expect(service.lastWorkerOutcome!.phase, ArchiveWorkerPhase.completed);
++    expect(service.lastWorkerOutcome!.workerExitConfirmed, isTrue);
++  });
++}
+diff --git a/test/archive_combined_reliability_test.dart b/test/archive_combined_reliability_test.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..91fbf5ad39b1fb946feb3b72533f2c23e7878d3e
+--- /dev/null
++++ b/test/archive_combined_reliability_test.dart
+@@ -0,0 +1,337 @@
++import 'dart:async';
++import 'dart:convert';
++import 'dart:io';
++import 'dart:isolate';
++
++import 'package:archive/archive_io.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:nfile/services/archive_extraction.dart';
++import 'package:nfile/services/archive_operation_ownership.dart';
++import 'package:nfile/services/archive_service.dart';
++import 'package:nfile/services/archive_worker_lifecycle.dart';
++import 'package:nfile/services/background_archive_service.dart';
++
++// Exercise the real coordinator + real extraction pipeline in a real isolate.
++// Only the boundary gate is injected, to choose cancellation/publication order.
++void _controlledExtraction(Map<String, dynamic> args) async {
++  final events = args['sendPort'] as SendPort;
++  final barrier = args['barrier'] as SendPort;
++  final control = ReceivePort();
++  final gate = Completer<void>();
++  var cancelled = false;
++  var paused = false;
++  control.listen((message) {
++    if (message is! Map) return;
++    if (message['command'] == 'cancel' &&
++        message['operationId'] == args['operationId']) {
++      cancelled = true;
++      if (!gate.isCompleted) gate.complete();
++    } else if (message['command'] == 'continue' && !gate.isCompleted) {
++      gate.complete();
++    }
++  });
++  events.send({
++    'status': 'control',
++    'sendPort': control.sendPort,
++    'operationId': args['operationId'],
++  });
++  // FIFO on this one SendPort proves the coordinator consumed control first.
++  events.send({
++    'status': 'progress',
++    'progress': 0.0,
++    'currentFile': 'controlled-ready',
++    'operationId': args['operationId'],
++  });
++  try {
++    await ArchiveExtraction.extract(
++      archivePath: args['archivePath'] as String,
++      destinationDir: args['destinationDir'] as String,
++      background: true,
++      isCancelled: () => cancelled,
++      onBoundary: (phase, paths) async {
++        if (!paused && phase == args['pauseAt']) {
++          paused = true;
++          barrier.send({'control': control.sendPort, 'paths': paths});
++          await gate.future;
++        }
++      },
++    );
++    events.send({'status': 'completed'});
++  } on ArchiveExtractionFailure catch (error) {
++    events.send({
++      'status': error.isPartial
++          ? 'partial'
++          : error.cancelled
++          ? 'cancelled'
++          : 'error',
++      'cancelled': error.cancelled,
++      'publishedPaths': error.publishedPaths,
++      'error': error.toString(),
++    });
++  } catch (error) {
++    events.send({'status': 'error', 'error': '$error'});
++  } finally {
++    control.close();
++  }
++}
++
++Future<void> _controlledReady(BackgroundArchiveService service) async {
++  final ready = Completer<void>();
++  void listener() {
++    if (service.activeOperation.value?.currentFile == 'controlled-ready' &&
++        !ready.isCompleted) {
++      ready.complete();
++    }
++  }
++
++  service.activeOperation.addListener(listener);
++  try {
++    listener();
++    await ready.future.timeout(const Duration(seconds: 20));
++  } finally {
++    service.activeOperation.removeListener(listener);
++  }
++}
++
++Future<void> _exited(BackgroundArchiveService service) async {
++  if (service.activeOperation.value == null) return;
++  final done = Completer<void>();
++  void listener() {
++    if (service.activeOperation.value == null && !done.isCompleted) {
++      done.complete();
++    }
++  }
++
++  service.activeOperation.addListener(listener);
++  try {
++    await done.future.timeout(const Duration(seconds: 20));
++  } finally {
++    service.activeOperation.removeListener(listener);
++  }
++}
++
++void main() {
++  TestWidgetsFlutterBinding.ensureInitialized();
++  late Directory fixture;
++  late Directory destination;
++  late File input;
++
++  setUp(() {
++    fixture = Directory.systemTemp.createTempSync('fiyora_combined_');
++    destination = Directory('${fixture.path}/out')..createSync();
++    final archive = Archive()
++      ..addFile(ArchiveFile('first.txt', 5, utf8.encode('FIRST')))
++      ..addFile(ArchiveFile('second.txt', 6, utf8.encode('SECOND')));
++    input = File('${fixture.path}/input.zip')
++      ..writeAsBytesSync(ZipEncoder().encode(archive)!);
++  });
++  tearDown(() => fixture.deleteSync(recursive: true));
++
++  for (final phase in ['staging', 'published']) {
++    test(
++      'cancel during $phase preserves publication and holds ownership until exit',
++      () async {
++        final service = BackgroundArchiveService.forTesting();
++        final barrier = ReceivePort();
++        try {
++          await service.startWorkerForTesting(
++            task: _controlledExtraction,
++            arguments: {
++              'archivePath': input.path,
++              'destinationDir': destination.path,
++              'pauseAt': phase,
++              'barrier': barrier.sendPort,
++            },
++          );
++          final reached =
++              await barrier.first.timeout(const Duration(seconds: 20)) as Map;
++          await _controlledReady(service);
++          final originalId = service.activeOperation.value!.id;
++          await expectLater(
++            service.startWorkerForTesting(
++              task: BackgroundArchiveService.extractIsolateTask,
++            ),
++            throwsA(isA<ArchiveOperationBusyException>()),
++          );
++          final stopped = _exited(service);
++          service.cancelOperation(operationId: originalId);
++          expect(service.activeOperation.value!.isCancelling, isTrue);
++          await expectLater(
++            service.startWorkerForTesting(
++              task: BackgroundArchiveService.extractIsolateTask,
++            ),
++            throwsA(isA<ArchiveOperationBusyException>()),
++          );
++          await stopped;
++          expect(service.lastWorkerOutcome!.workerExitConfirmed, isTrue);
++          final first = File('${destination.path}/first.txt');
++          if (phase == 'published') {
++            expect(
++              service.lastWorkerOutcome!.phase,
++              ArchiveWorkerPhase.partial,
++            );
++            expect(
++              service.lastWorkerOutcome!.terminalMessage!['cancelled'],
++              isTrue,
++            );
++            expect(reached['paths'], contains(first.path));
++            expect(first.readAsStringSync(), 'FIRST');
++            expect(
++              File('${destination.path}/second.txt').existsSync(),
++              isFalse,
++            );
++          } else {
++            expect(
++              service.lastWorkerOutcome!.phase,
++              ArchiveWorkerPhase.cancelConfirmed,
++            );
++            expect(destination.listSync(), isEmpty);
++          }
++
++          // Explicit retry through the production worker: partial collision is
++          // reported, and prior output is kept. A pre-publication cancel retries.
++          final retried = service.startWorkerForTesting(
++            task: BackgroundArchiveService.extractIsolateTask,
++            arguments: {
++              'archivePath': input.path,
++              'destinationDir': destination.path,
++            },
++          );
++          final retryId = service.activeOperation.value!.id;
++          service.handleNotificationCancellation({'operationId': originalId});
++          expect(service.activeOperation.value!.isCancelling, isFalse);
++          expect(retryId, isNot(originalId));
++          final retryExited = _exited(service);
++          await retried;
++          await retryExited;
++          expect(
++            service.lastWorkerOutcome!.phase,
++            phase == 'published'
++                ? ArchiveWorkerPhase.failed
++                : ArchiveWorkerPhase.completed,
++          );
++          expect(first.readAsStringSync(), 'FIRST');
++        } finally {
++          barrier.close();
++        }
++      },
++    );
++  }
++
++  test(
++    'publication collision preserves foreign data and permits explicit retry elsewhere',
++    () async {
++      final service = BackgroundArchiveService.forTesting();
++      final barrier = ReceivePort();
++      try {
++        await service.startWorkerForTesting(
++          task: _controlledExtraction,
++          arguments: {
++            'archivePath': input.path,
++            'destinationDir': destination.path,
++            'pauseAt': 'publishing',
++            'barrier': barrier.sendPort,
++          },
++        );
++        final reached =
++            await barrier.first.timeout(const Duration(seconds: 20)) as Map;
++        final foreign = File('${destination.path}/first.txt')
++          ..writeAsStringSync('FOREIGN');
++        final stopped = _exited(service);
++        (reached['control'] as SendPort).send({'command': 'continue'});
++        await stopped;
++        expect(service.lastWorkerOutcome!.phase, ArchiveWorkerPhase.failed);
++        expect(foreign.readAsStringSync(), 'FOREIGN');
++        expect(File('${destination.path}/second.txt').existsSync(), isFalse);
++        final retry = Directory('${fixture.path}/retry')..createSync();
++        final starting = service.startWorkerForTesting(
++          task: BackgroundArchiveService.extractIsolateTask,
++          arguments: {'archivePath': input.path, 'destinationDir': retry.path},
++        );
++        final retryExited = _exited(service);
++        await starting;
++        await retryExited;
++        expect(service.lastWorkerOutcome!.phase, ArchiveWorkerPhase.completed);
++        expect(File('${retry.path}/first.txt').readAsStringSync(), 'FIRST');
++        expect(foreign.readAsStringSync(), 'FOREIGN');
++      } finally {
++        barrier.close();
++      }
++    },
++  );
++
++  test(
++    'archive creation success and source cleanup failure survive coordinator completion',
++    () async {
++      final sourceDir = Directory('${fixture.path}/protected')..createSync();
++      final source = File('${sourceDir.path}/source.txt')
++        ..writeAsStringSync('KEEP');
++      expect(Process.runSync('chmod', ['0555', sourceDir.path]).exitCode, 0);
++      try {
++        final output = '${fixture.path}/created.zip';
++        final service = BackgroundArchiveService.forTesting();
++        final starting = service.startWorkerForTesting(
++          task: BackgroundArchiveService.compressIsolateTask,
++          arguments: {
++            'sourcePaths': [source.path],
++            'destinationPath': output,
++            'format': 'zip',
++            'level': 6,
++            'deleteSource': true,
++          },
++        );
++        final stopped = _exited(service);
++        await starting;
++        await stopped;
++        expect(service.lastWorkerOutcome!.phase, ArchiveWorkerPhase.partial);
++        expect(
++          service.lastWorkerOutcome!.terminalMessage!['archiveCreated'],
++          isTrue,
++        );
++        expect(
++          service.lastWorkerOutcome!.terminalMessage!['reason'],
++          'sourceCleanupFailed',
++        );
++        expect(source.readAsStringSync(), 'KEEP');
++        final archive = ZipDecoder().decodeBytes(
++          File(output).readAsBytesSync(),
++        );
++        expect(archive.files.single.content, utf8.encode('KEEP'));
++      } finally {
++        Process.runSync('chmod', ['0755', sourceDir.path]);
++      }
++    },
++  );
++
++  for (final format in ['zip', 'tar']) {
++    test(
++      'combined $format creation and staged extraction retain nested empty Unicode directories',
++      () async {
++        final source = Directory('${fixture.path}/資料')..createSync();
++        Directory('${source.path}/kosong/空').createSync(recursive: true);
++        File('${source.path}/data.txt').writeAsStringSync('DATA');
++        await ArchiveService.createArchive(
++          sourcePaths: [source.path],
++          destinationDir: fixture.path,
++          archiveName: 'roundtrip',
++          format: format,
++          compressionLevel: 6,
++          deleteSource: false,
++          separateArchives: false,
++        );
++        await ArchiveService.extractArchive(
++          archivePath: '${fixture.path}/roundtrip.$format',
++          destinationDir: destination.path,
++        );
++        expect(
++          Directory('${destination.path}/資料/kosong/空').existsSync(),
++          isTrue,
++        );
++        expect(
++          File('${destination.path}/資料/data.txt').readAsStringSync(),
++          'DATA',
++        );
++      },
++    );
++  }
++}
+diff --git a/test/archive_empty_directory_round_trip_test.dart b/test/archive_empty_directory_round_trip_test.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..0cf02cdf072dd025631dc1dabbb382aa266fc53f
+--- /dev/null
++++ b/test/archive_empty_directory_round_trip_test.dart
+@@ -0,0 +1,277 @@
++import 'dart:convert';
++import 'dart:io';
++import 'dart:isolate';
++
++import 'package:archive/archive_io.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:nfile/services/archive_service.dart';
++import 'package:nfile/services/archive_input_entries.dart';
++import 'package:nfile/services/background_archive_service.dart';
++import 'package:path/path.dart' as p;
++
++Future<Map> _worker(
++  Future<void> Function(Map<String, dynamic>) entry,
++  Map<String, dynamic> args,
++) async {
++  final messages = ReceivePort();
++  Isolate? isolate;
++  try {
++    isolate = await Isolate.spawn(entry, {
++      ...args,
++      'sendPort': messages.sendPort,
++    }, onError: messages.sendPort);
++    final result = await messages
++        .firstWhere((event) {
++          return event is! Map ||
++              const {'completed', 'error', 'partial', 'cancelled'}.contains(event['status']);
++        })
++        .timeout(const Duration(seconds: 20));
++    if (result is! Map) throw StateError('$result');
++    return result;
++  } finally {
++    isolate?.kill(priority: Isolate.immediate);
++    messages.close();
++  }
++}
++
++void main() {
++  TestWidgetsFlutterBinding.ensureInitialized();
++  late Directory fixture;
++
++  setUp(() {
++    fixture = Directory.systemTemp.createTempSync('ar014_');
++  });
++  tearDown(() => fixture.deleteSync(recursive: true));
++
++  for (final background in [false, true]) {
++    for (final format in ['zip', 'tar']) {
++      final label = '${background ? 'background' : 'direct'} $format';
++
++      Future<void> compress(List<String> sources, String destination) async {
++        if (background) {
++          final result =
++              await _worker(BackgroundArchiveService.compressIsolateTask, {
++                'sourcePaths': sources,
++                'destinationPath': destination,
++                'format': format,
++                'level': 6,
++                'deleteSource': false,
++              });
++          if (result['status'] != 'completed') throw StateError('$result');
++        } else {
++          await ArchiveService.createArchive(
++            sourcePaths: sources,
++            destinationDir: p.dirname(destination),
++            archiveName: p.basenameWithoutExtension(destination),
++            format: format,
++            compressionLevel: 6,
++            deleteSource: false,
++            separateArchives: false,
++          );
++        }
++      }
++
++      Archive readArchive(String path) {
++        final bytes = File(path).readAsBytesSync();
++        return format == 'zip'
++            ? ZipDecoder().decodeBytes(bytes)
++            : TarDecoder().decodeBytes(bytes);
++      }
++
++      Future<void> extract(String path, String destination) async {
++        if (background) {
++          final result = await _worker(
++            BackgroundArchiveService.extractIsolateTask,
++            {'archivePath': path, 'destinationDir': destination},
++          );
++          expect(result['status'], 'completed', reason: '$result');
++        } else {
++          await ArchiveService.extractArchive(
++            archivePath: path,
++            destinationDir: destination,
++          );
++        }
++      }
++
++      test(
++        '$label round-trips a completely empty selected directory',
++        () async {
++          final source = Directory(p.join(fixture.path, 'empty'))..createSync();
++          final archive = p.join(fixture.path, 'empty.$format');
++          final output = Directory(p.join(fixture.path, 'output'))
++            ..createSync();
++          await compress([source.path], archive);
++          final entries = readArchive(archive).files;
++          expect(entries.length, 1);
++          expect(entries.single.name.replaceAll(RegExp(r'/+$'), ''), 'empty');
++          expect(entries.single.isFile, isFalse);
++          await extract(archive, output.path);
++          expect(Directory(p.join(output.path, 'empty')).existsSync(), isTrue);
++          expect(Directory(p.join(output.path, 'empty')).listSync(), isEmpty);
++        },
++      );
++
++      test(
++        '$label round-trips nested empty Unicode directories and file data',
++        () async {
++          final source = Directory(p.join(fixture.path, 'tree'))..createSync();
++          Directory(
++            p.join(source.path, 'empty', 'nested'),
++          ).createSync(recursive: true);
++          Directory(p.join(source.path, '資料', '空')).createSync(recursive: true);
++          File(
++            p.join(source.path, 'data.txt'),
++          ).writeAsStringSync('KEEP CONTENT');
++          final archive = p.join(fixture.path, 'tree.$format');
++          final output = Directory(p.join(fixture.path, 'output'))
++            ..createSync();
++          await compress([source.path], archive);
++          final entries = readArchive(archive).files;
++          expect(
++            entries.map((f) => f.name.replaceAll(RegExp(r'/+$'), '')).toSet(),
++            {
++              'tree',
++              'tree/empty',
++              'tree/empty/nested',
++              'tree/資料',
++              'tree/資料/空',
++              'tree/data.txt',
++            },
++          );
++          expect(entries.where((f) => !f.isFile).length, 5);
++          expect(
++            entries.every(
++              (f) =>
++                  !p.posix.isAbsolute(f.name) &&
++                  !f.name.split('/').contains('..'),
++            ),
++            isTrue,
++          );
++          await extract(archive, output.path);
++          for (final name in ['tree/empty/nested', 'tree/資料/空']) {
++            final directory = Directory(p.join(output.path, name));
++            expect(directory.existsSync(), isTrue);
++            expect(directory.listSync(), isEmpty);
++          }
++          expect(
++            File(p.join(output.path, 'tree/data.txt')).readAsStringSync(),
++            'KEEP CONTENT',
++          );
++        },
++      );
++
++      test('$label repeated selections emit no duplicate entries', () async {
++        final source = Directory(p.join(fixture.path, '資料'))..createSync();
++        Directory(p.join(source.path, 'empty')).createSync();
++        File(p.join(source.path, 'data.txt')).writeAsStringSync('DATA');
++        final archive = p.join(fixture.path, 'repeated.$format');
++        await compress([source.path, source.path], archive);
++        final entries = readArchive(archive).files;
++        expect(entries.length, 3);
++        expect(entries.map((f) => f.name).toSet().length, entries.length);
++      });
++
++      test(
++        '$label rejects colliding selected archive names without writing output',
++        () async {
++          final first = Directory(p.join(fixture.path, 'one', 'same'))
++            ..createSync(recursive: true);
++          final second = Directory(p.join(fixture.path, 'two', 'same'))
++            ..createSync(recursive: true);
++          File(p.join(first.path, 'first.txt')).writeAsStringSync('FIRST');
++          File(p.join(second.path, 'second.txt')).writeAsStringSync('SECOND');
++          final archive = p.join(fixture.path, 'conflict.$format');
++          await expectLater(
++            compress([first.path, second.path], archive),
++            throwsA(
++              predicate<Object>(
++                (e) => e.toString().contains('Conflicting archive entry name'),
++              ),
++            ),
++          );
++          expect(File(archive).existsSync(), isFalse);
++          expect(
++            File(p.join(first.path, 'first.txt')).readAsStringSync(),
++            'FIRST',
++          );
++          expect(
++            File(p.join(second.path, 'second.txt')).readAsStringSync(),
++            'SECOND',
++          );
++        },
++      );
++
++      test(
++        '$label rejects backslash source names that codecs would reinterpret',
++        () async {
++          if (Platform.isWindows) return;
++          final source = Directory(p.join(fixture.path, r'unsafe\..\escape'))
++            ..createSync();
++          File(p.join(source.path, 'keep.txt')).writeAsStringSync('KEEP');
++          final archive = p.join(fixture.path, 'unsafe.$format');
++          await expectLater(
++            compress([source.path], archive),
++            throwsA(
++              predicate<Object>(
++                (e) => e.toString().contains('Unsafe archive entry name'),
++              ),
++            ),
++          );
++          expect(File(archive).existsSync(), isFalse);
++          expect(source.existsSync(), isTrue);
++        },
++      );
++    }
++  }
++
++  test(
++    'TAR PAX path records use UTF-8 byte lengths and retain long Unicode names',
++    () {
++      final name = '資料/${List.filled(50, '空').join()}/';
++      final archive = Archive()
++        ..addFile(ArchiveFile(name, 0, <int>[])..isFile = false)
++        ..addFile(ArchiveFile('資料/second/', 0, <int>[])..isFile = false);
++      final bytes = encodeTarArchiveEntries(archive);
++      final header = TarFile.read(InputStream(bytes));
++      expect(header.typeFlag, TarFile.TYPE_EX_HEADER);
++      final recordBytes = header.rawContent!.toUint8List();
++      final record = utf8.decode(recordBytes);
++      expect(int.parse(record.split(' ').first), recordBytes.length);
++      expect(record, endsWith(' path=$name\n'));
++      final decoded = TarDecoder().decodeBytes(bytes).files;
++      expect(decoded.map((f) => f.name), [name, '資料/second/']);
++      expect(decoded.every((f) => !f.isFile), isTrue);
++      expect(
++        decoded.length,
++        2,
++        reason: 'PAX metadata must not leak as user entries',
++      );
++    },
++  );
++
++  test('generated Unicode TAR is readable by the system tar tool', () {
++    if (!Platform.isLinux) return;
++    final archive = Archive()
++      ..addFile(ArchiveFile('資料/空/', 0, <int>[])..isFile = false)
++      ..addFile(ArchiveFile('資料/内容.txt', 4, utf8.encode('DATA')));
++    final file = File(p.join(fixture.path, 'pax.tar'))
++      ..writeAsBytesSync(encodeTarArchiveEntries(archive));
++    final result = Process.runSync('tar', ['-tf', file.path]);
++    expect(result.exitCode, 0, reason: '${result.stderr}');
++    expect(
++      (result.stdout as String).split('\n').where((name) => name.isNotEmpty),
++      ['資料/空/', '資料/内容.txt'],
++    );
++  });
++
++  test('nested symlinks are not followed outside the selected source', () {
++    if (Platform.isWindows) return;
++    final source = Directory(p.join(fixture.path, 'source'))..createSync();
++    final outside = Directory(p.join(fixture.path, 'outside'))..createSync();
++    File(p.join(outside.path, 'private.txt')).writeAsStringSync('OUTSIDE');
++    Link(p.join(source.path, 'linked')).createSync(outside.path);
++    final entries = collectArchiveInputEntries([source.path]);
++    expect(entries.map((entry) => entry.relPath), ['source']);
++    expect(entries.single.isDirectory, isTrue);
++  });
++}
+diff --git a/test/archive_operation_ownership_test.dart b/test/archive_operation_ownership_test.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..503f0d0b293d06f01386ae482ffec30b81e81c89
+--- /dev/null
++++ b/test/archive_operation_ownership_test.dart
+@@ -0,0 +1,175 @@
++import 'dart:async';
++
++import 'package:flutter_test/flutter_test.dart';
++import 'package:nfile/services/archive_operation_ownership.dart';
++
++void main() {
++  test('admission happens before an async spawn can yield', () async {
++    final ownership = ArchiveOperationOwnership();
++    final spawn = Completer<void>();
++    final attached = <String>[];
++
++    Future<ArchiveOperationLease> start(String kind) async {
++      final lease = ownership.acquire(kind);
++      await spawn.future;
++      if (ownership.owns(lease)) attached.add(lease.id);
++      return lease;
++    }
++
++    final first = start('compress');
++    final firstLease = ownership.active!;
++    await expectLater(
++      start('extract'),
++      throwsA(
++        isA<ArchiveOperationBusyException>().having(
++          (error) => error.activeOperationId,
++          'active operation ID',
++          firstLease.id,
++        ),
++      ),
++    );
++    expect(ownership.active, same(firstLease));
++    expect(attached, isEmpty);
++
++    spawn.complete();
++    expect(await first, same(firstLease));
++    expect(attached, [firstLease.id]);
++  });
++
++  test('a rejected start cannot replace operation state or resources', () {
++    final ownership = ArchiveOperationOwnership();
++    final first = ownership.acquire('compress');
++    final resourceOwners = <String, Object>{first.id: Object()};
++    final firstResources = resourceOwners[first.id];
++
++    expect(() {
++      final second = ownership.acquire('extract');
++      resourceOwners[second.id] = Object();
++    }, throwsA(isA<ArchiveOperationBusyException>()));
++    expect(resourceOwners.length, 1);
++    expect(resourceOwners[first.id], same(firstResources));
++    expect(ownership.owns(first), isTrue);
++  });
++
++  test('requested cancellation retains admission until worker exit', () async {
++    final ownership = ArchiveOperationOwnership();
++    final first = ownership.acquire('extract');
++    final workerExit = Completer<void>();
++    var cancelRequested = false;
++
++    Future<void> cancelAndWaitForExit() async {
++      cancelRequested = true;
++      await workerExit.future;
++      ownership.release(first);
++    }
++
++    final cancellation = cancelAndWaitForExit();
++    expect(cancelRequested, isTrue);
++    expect(ownership.isBusy, isTrue);
++    expect(
++      () => ownership.acquire('compress'),
++      throwsA(isA<ArchiveOperationBusyException>()),
++    );
++    workerExit.complete();
++    await cancellation;
++    expect(ownership.isBusy, isFalse);
++    final second = ownership.acquire('compress');
++    expect(ownership.owns(second), isTrue);
++    expect(second.id, isNot(first.id));
++  });
++
++  test('late completion cannot release a later operation', () {
++    final ownership = ArchiveOperationOwnership();
++    final first = ownership.acquire('extract');
++    expect(ownership.release(first), isTrue);
++    final second = ownership.acquire('compress');
++
++    expect(ownership.release(first), isFalse);
++    expect(ownership.active, same(second));
++    expect(ownership.owns(second), isTrue);
++    expect(ownership.owns(first), isFalse);
++  });
++
++  test('stale progress and resource cleanup are ignored after replacement', () {
++    final ownership = ArchiveOperationOwnership();
++    final first = ownership.acquire('compress');
++    var visibleProgress = 0.0;
++    Object? isolateOwner = first;
++    Object? receivePortOwner = first;
++
++    void onProgress(ArchiveOperationLease lease, double progress) {
++      if (!ownership.owns(lease)) return;
++      visibleProgress = progress;
++    }
++
++    void onExit(ArchiveOperationLease lease) {
++      if (!ownership.owns(lease)) return;
++      isolateOwner = null;
++      receivePortOwner = null;
++      ownership.release(lease);
++    }
++
++    onExit(first);
++    final second = ownership.acquire('extract');
++    isolateOwner = second;
++    receivePortOwner = second;
++    onProgress(second, 0.4);
++
++    onProgress(first, 1.0);
++    onExit(first);
++    expect(visibleProgress, 0.4);
++    expect(isolateOwner, same(second));
++    expect(receivePortOwner, same(second));
++    expect(ownership.active, same(second));
++  });
++
++  test('foreign ownership objects cannot clear another coordinator', () {
++    final firstOwner = ArchiveOperationOwnership();
++    final secondOwner = ArchiveOperationOwnership();
++    final first = firstOwner.acquire('extract');
++    final second = secondOwner.acquire('extract');
++
++    expect(firstOwner.release(second), isFalse);
++    expect(secondOwner.release(first), isFalse);
++    expect(firstOwner.active, same(first));
++    expect(secondOwner.active, same(second));
++    expect(first.id, isNot(second.id));
++  });
++
++  test('release is idempotent and enables an explicit retry', () {
++    final ownership = ArchiveOperationOwnership();
++    final first = ownership.acquire('extract');
++    expect(ownership.release(first), isTrue);
++    expect(ownership.release(first), isFalse);
++    final retry = ownership.acquire('extract');
++    expect(retry.id, isNot(first.id));
++    expect(ownership.release(first), isFalse);
++    expect(ownership.active, same(retry));
++  });
++
++  test('a burst of starts admits exactly one operation', () async {
++    final ownership = ArchiveOperationOwnership();
++    final accepted = <ArchiveOperationLease>[];
++    final rejected = <ArchiveOperationBusyException>[];
++    await Future.wait(
++      List.generate(
++        20,
++        (index) => Future<void>(() {
++          try {
++            accepted.add(
++              ownership.acquire(index.isEven ? 'compress' : 'extract'),
++            );
++          } on ArchiveOperationBusyException catch (error) {
++            rejected.add(error);
++          }
++        }),
++      ),
++    );
++    expect(accepted.length, 1);
++    expect(rejected.length, 19);
++    expect(rejected.map((error) => error.activeOperationId).toSet(), {
++      accepted.single.id,
++    });
++    expect(ownership.active, same(accepted.single));
++  });
++}
+diff --git a/test/archive_partial_batch_outcome_test.dart b/test/archive_partial_batch_outcome_test.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..8c051a83cd501619b230df10ea651528d23e55f7
+--- /dev/null
++++ b/test/archive_partial_batch_outcome_test.dart
+@@ -0,0 +1,221 @@
++import 'dart:convert';
++import 'dart:io';
++
++import 'package:archive/archive_io.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:nfile/services/archive_creation_outcome.dart';
++import 'package:nfile/services/archive_service.dart';
++import 'package:path/path.dart' as p;
++
++// Added during the static-only follow-up; execution was deferred at authoring.
++void main() {
++  TestWidgetsFlutterBinding.ensureInitialized();
++
++  group('separate archive partial-batch outcomes', () {
++    late Directory fixture;
++    late Directory output;
++
++    setUp(() {
++      fixture = Directory.systemTemp.createTempSync('ar015_batch_');
++      output = Directory(p.join(fixture.path, 'output'))..createSync();
++    });
++
++    tearDown(() {
++      // Fixtures deny file reads or parent writes, never directory traversal.
++      for (final entity in fixture.listSync(recursive: true, followLinks: false)) {
++        Process.runSync('chmod', [entity is Directory ? '0755' : '0644', entity.path]);
++      }
++      fixture.deleteSync(recursive: true);
++    });
++
++    File input(String name, String contents, {Directory? parent}) =>
++        File(p.join((parent ?? fixture).path, name))..writeAsStringSync(contents);
++
++    String archivePath(File source) =>
++        p.join(output.path, '${p.basenameWithoutExtension(source.path)}.zip');
++
++    void denyReads(File file) {
++      final result = Process.runSync('chmod', ['0000', file.path]);
++      expect(result.exitCode, 0, reason: result.stderr.toString());
++      expect(() => file.readAsBytesSync(), throwsA(isA<FileSystemException>()),
++          reason: 'The fixture requires an unprivileged Linux executor');
++    }
++
++    void denyCleanup(Directory directory, File source) {
++      final result = Process.runSync('chmod', ['0555', directory.path]);
++      expect(result.exitCode, 0, reason: result.stderr.toString());
++      expect(() => source.deleteSync(), throwsA(isA<FileSystemException>()));
++    }
++
++    Future<ArchiveCreationOutcome> create(List<File> sources, {bool deleteSource = true}) =>
++        ArchiveService.createArchive(
++          sourcePaths: sources.map((file) => file.path).toList(),
++          destinationDir: output.path,
++          archiveName: 'unused',
++          format: 'zip',
++          compressionLevel: 6,
++          deleteSource: deleteSource,
++          separateArchives: true,
++        );
++
++    void expectArchive(File source, String contents) {
++      final archive = ZipDecoder().decodeBytes(File(archivePath(source)).readAsBytesSync());
++      expect(archive.files.single.name, p.basename(source.path));
++      expect(archive.files.single.content, utf8.encode(contents));
++    }
++
++    for (final deleteSource in [false, true]) {
++      test('first creation failure still throws, deleteSource=$deleteSource', () async {
++        final failed = input('failed.txt', 'FAILED');
++        final pending = input('pending.txt', 'PENDING');
++        denyReads(failed);
++
++        await expectLater(
++          create([failed, pending], deleteSource: deleteSource),
++          throwsA(isA<FileSystemException>().having((error) => error.path, 'source path', failed.path)),
++        );
++
++        expect(output.listSync(), isEmpty);
++        expect(failed.existsSync(), isTrue);
++        expect(Process.runSync('chmod', ['0644', failed.path]).exitCode, 0);
++        expect(failed.readAsStringSync(), 'FAILED');
++        expect(pending.readAsStringSync(), 'PENDING');
++      });
++
++      test('later failure retains multiple outputs, deleteSource=$deleteSource', () async {
++        final first = input('first.txt', 'FIRST');
++        final second = input('second.txt', 'SECOND');
++        final failed = input('failed.txt', 'FAILED');
++        final pending = input('pending.txt', 'PENDING');
++        denyReads(failed);
++
++        final outcome = await create([first, second, failed, pending], deleteSource: deleteSource);
++
++        expect(outcome.archivePaths, [archivePath(first), archivePath(second)]);
++        expect(outcome.archiveCreated, isTrue);
++        expect(outcome.isPartial, isTrue);
++        expect(outcome.sourceCleanupFailures, isEmpty);
++        expect(outcome.batchFailure!.sourcePath, failed.path);
++        expect(outcome.batchFailure!.archivePath, archivePath(failed));
++        expect(outcome.batchFailure!.error, isA<FileSystemException>());
++        expect(outcome.batchFailure!.stackTrace.toString(), isNotEmpty);
++        expect(outcome.message, contains(outcome.batchFailure!.error.toString()));
++        expect(outcome.message, contains('batch stopped'));
++        expect(outcome.message, isNot(contains('created successfully')));
++        final message = outcome.toWorkerMessage();
++        expect(message['status'], 'partial');
++        expect(message['reason'], 'batchCreationFailed');
++        expect((message['batchFailure'] as Map)['error'], outcome.batchFailure!.error.toString());
++        expectArchive(first, 'FIRST');
++        expectArchive(second, 'SECOND');
++        expect(first.existsSync(), !deleteSource);
++        expect(second.existsSync(), !deleteSource);
++        expect(failed.existsSync(), isTrue);
++        expect(Process.runSync('chmod', ['0644', failed.path]).exitCode, 0);
++        expect(failed.readAsStringSync(), 'FAILED');
++        expect(pending.readAsStringSync(), 'PENDING');
++        expect(File(archivePath(failed)).existsSync(), isFalse);
++        expect(File(archivePath(pending)).existsSync(), isFalse);
++      });
++    }
++
++    test('earlier cleanup failure survives a later creation failure', () async {
++      final locked = Directory(p.join(fixture.path, 'locked'))..createSync();
++      final first = input('first.txt', 'KEEP', parent: locked);
++      final failed = input('failed.txt', 'FAILED');
++      final pending = input('pending.txt', 'PENDING');
++      denyCleanup(locked, first);
++      denyReads(failed);
++
++      final outcome = await create([first, failed, pending]);
++
++      expect(outcome.archivePaths, [archivePath(first)]);
++      expect(outcome.isPartial, isTrue);
++      expect(outcome.sourceCleanupFailures.single.path, first.path);
++      expect(outcome.sourceCleanupFailures.single.error, isNotEmpty);
++      expect(outcome.batchFailure!.sourcePath, failed.path);
++      expect(outcome.message, contains('could not be removed'));
++      expect(outcome.toWorkerMessage()['status'], 'partial');
++      expectArchive(first, 'KEEP');
++      expect(first.readAsStringSync(), 'KEEP');
++      expect(failed.existsSync(), isTrue);
++      expect(Process.runSync('chmod', ['0644', failed.path]).exitCode, 0);
++      expect(failed.readAsStringSync(), 'FAILED');
++      expect(pending.readAsStringSync(), 'PENDING');
++      expect(File(archivePath(pending)).existsSync(), isFalse);
++    });
++
++    test('cleanup-only failure keeps its existing classification', () async {
++      final locked = Directory(p.join(fixture.path, 'locked'))..createSync();
++      final first = input('first.txt', 'KEEP', parent: locked);
++      final second = input('second.txt', 'SECOND');
++      denyCleanup(locked, first);
++
++      final outcome = await create([first, second]);
++
++      expect(outcome.archivePaths, [archivePath(first), archivePath(second)]);
++      expect(outcome.batchFailure, isNull);
++      expect(outcome.sourceCleanupFailures.single.path, first.path);
++      expect(outcome.toWorkerMessage()['reason'], 'sourceCleanupFailed');
++      expect(outcome.toWorkerMessage().containsKey('batchFailure'), isFalse);
++      expectArchive(first, 'KEEP');
++      expectArchive(second, 'SECOND');
++      expect(first.readAsStringSync(), 'KEEP');
++      expect(second.existsSync(), isFalse);
++    });
++
++    test('retry is explicit, refuses old outputs and can process only remaining items', () async {
++      final first = input('first.txt', 'FIRST');
++      final failed = input('failed.txt', 'FAILED');
++      final pending = input('pending.txt', 'PENDING');
++      denyReads(failed);
++      final partial = await create([first, failed, pending], deleteSource: false);
++      expect(partial.isPartial, isTrue);
++      final preserved = File(archivePath(first)).readAsBytesSync();
++      expect(Process.runSync('chmod', ['0644', failed.path]).exitCode, 0);
++
++      // Retrying the original plan must fail preflight without deleting sources.
++      await expectLater(create([first, failed, pending]), throwsA(isA<FileSystemException>()));
++      expect(first.readAsStringSync(), 'FIRST');
++      expect(failed.readAsStringSync(), 'FAILED');
++      expect(pending.readAsStringSync(), 'PENDING');
++      expect(File(archivePath(first)).readAsBytesSync(), preserved);
++
++      final retry = await create([failed, pending]);
++      expect(retry.isPartial, isFalse);
++      expect(retry.batchFailure, isNull);
++      expect(retry.sourceCleanupFailures, isEmpty);
++      expect(retry.archivePaths, [archivePath(failed), archivePath(pending)]);
++      expect(retry.toWorkerMessage()['status'], 'completed');
++      expectArchive(failed, 'FAILED');
++      expectArchive(pending, 'PENDING');
++      expect(failed.existsSync(), isFalse);
++      expect(pending.existsSync(), isFalse);
++      expect(first.readAsStringSync(), 'FIRST');
++      expect(File(archivePath(first)).readAsBytesSync(), preserved);
++      expect(partial.batchFailure!.sourcePath, failed.path);
++      expect(partial.archivePaths, [archivePath(first)]);
++    });
++  }, skip: !Platform.isLinux);
++
++  test('outcome extension preserves original error identity and legacy success defaults', () {
++    final error = FileSystemException('original failure', '/failed.txt');
++    final stackTrace = StackTrace.current;
++    final partial = ArchiveCreationOutcome(
++      archivePaths: ['/first.zip'],
++      batchFailure: ArchiveBatchFailure(
++        sourcePath: '/failed.txt', archivePath: '/failed.zip',
++        error: error, stackTrace: stackTrace,
++      ),
++    );
++    expect(partial.batchFailure!.error, same(error));
++    expect(partial.batchFailure!.stackTrace, same(stackTrace));
++    expect((partial.toWorkerMessage()['batchFailure'] as Map)['stackTrace'], stackTrace.toString());
++    final success = ArchiveCreationOutcome(archivePaths: ['/ok.zip']);
++    expect(success.batchFailure, isNull);
++    expect(success.isPartial, isFalse);
++    expect(success.message, 'Archive created successfully');
++    expect(success.toWorkerMessage()['reason'], 'archiveCreated');
++    expect(success.toWorkerMessage().containsKey('batchFailure'), isFalse);
++  });
++}
+diff --git a/test/archive_partial_extraction_rollback_test.dart b/test/archive_partial_extraction_rollback_test.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..791d651d605c68aa7391c3b75f32715339d4d988
+--- /dev/null
++++ b/test/archive_partial_extraction_rollback_test.dart
+@@ -0,0 +1,569 @@
++import 'dart:convert';
++import 'dart:io';
++import 'dart:isolate';
++
++import 'package:archive/archive_io.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:nfile/services/archive_extraction.dart';
++import 'package:nfile/services/archive_extraction_staging.dart';
++import 'package:nfile/services/archive_service.dart';
++import 'package:nfile/services/background_archive_service.dart';
++import 'package:path/path.dart' as p;
++
++// AR-012 safety regressions now exercise private staging/publication. The old
++// path-owned rollback API has been removed. Historical tests are retained as an
++// evidence artifact; full destination rollback is intentionally no longer a
++// success criterion after partial publication.
++void main() {
++  TestWidgetsFlutterBinding.ensureInitialized();
++  late Directory fixture;
++  late Directory destination;
++  late Directory blocked;
++
++  setUp(() {
++    fixture = Directory.systemTemp.createTempSync('ar012_');
++    destination = Directory(p.join(fixture.path, 'output'))..createSync();
++    blocked = Directory(p.join(destination.path, 'blocked'))..createSync();
++  });
++  tearDown(() {
++    if (blocked.existsSync()) Process.runSync('chmod', ['0755', blocked.path]);
++    fixture.deleteSync(recursive: true);
++  });
++
++  File makeArchive(
++    String format, {
++    bool nested = false,
++    bool directory = false,
++  }) {
++    final archive = Archive()
++      ..addFile(
++        directory
++            ? (ArchiveFile('marked/', 0, <int>[])..isFile = false)
++            : ArchiveFile(
++                nested ? 'created/sub/first.txt' : 'first.txt',
++                5,
++                utf8.encode('FIRST'),
++              ),
++      )
++      ..addFile(ArchiveFile('blocked/second.txt', 6, utf8.encode('SECOND')));
++    return File(p.join(fixture.path, 'partial.$format'))..writeAsBytesSync(
++      format == 'zip'
++          ? ZipEncoder().encode(archive)!
++          : TarEncoder().encode(archive),
++    );
++  }
++
++  void denySecondOutputWrites() {
++    expect(Process.runSync('chmod', ['0555', blocked.path]).exitCode, 0);
++    expect(
++      () => File(p.join(blocked.path, 'probe')).createSync(),
++      throwsA(isA<FileSystemException>()),
++    );
++  }
++
++  Future<Map> worker(String archivePath) async {
++    final port = ReceivePort();
++    Isolate? isolate;
++    try {
++      isolate = await Isolate.spawn(
++        BackgroundArchiveService.extractIsolateTask,
++        <String, dynamic>{
++          'sendPort': port.sendPort,
++          'archivePath': archivePath,
++          'destinationDir': destination.path,
++          'password': null,
++        },
++      );
++      return await port
++              .firstWhere(
++                (event) =>
++                    event is Map &&
++                    [
++                      'completed',
++                      'error',
++                      'partial',
++                      'cancelled',
++                    ].contains(event['status']),
++              )
++              .timeout(const Duration(seconds: 30))
++          as Map;
++    } finally {
++      isolate?.kill(priority: Isolate.immediate);
++      port.close();
++    }
++  }
++
++  Future<void> extract(
++    File input, {
++    Future<void> Function(String, List<String>)? hook,
++    bool Function()? cancelled,
++  }) => ArchiveExtraction.extract(
++    archivePath: input.path,
++    destinationDir: destination.path,
++    onBoundary: hook,
++    isCancelled: cancelled,
++  );
++
++  for (final format in ['zip', 'tar']) {
++    test(
++      'direct $format partial publication preserves first output explicitly',
++      () async {
++        final input = makeArchive(format);
++        denySecondOutputWrites();
++        await expectLater(
++          ArchiveService.extractArchive(
++            archivePath: input.path,
++            destinationDir: destination.path,
++          ),
++          throwsA(
++            isA<ArchiveExtractionFailure>()
++                .having((e) => e.isPartial, 'partial', true)
++                .having(
++                  (e) => e.publishedPaths,
++                  'publishedPaths',
++                  contains(p.join(destination.path, 'first.txt')),
++                ),
++          ),
++        );
++        expect(
++          File(p.join(destination.path, 'first.txt')).readAsStringSync(),
++          'FIRST',
++        );
++      },
++    );
++    test(
++      'background $format partial acknowledgement does not hide published output',
++      () async {
++        final input = makeArchive(format);
++        denySecondOutputWrites();
++        final result = await worker(input.path);
++        expect(result['status'], 'partial');
++        expect(
++          result['publishedPaths'],
++          contains(p.join(destination.path, 'first.txt')),
++        );
++        expect(
++          File(p.join(destination.path, 'first.txt')).readAsStringSync(),
++          'FIRST',
++        );
++      },
++    );
++  }
++  test('AR-005 pre-existing conflict preserves all user data', () async {
++    final preserved = File(p.join(destination.path, 'first.txt'))
++      ..writeAsStringSync('KEEP');
++    await expectLater(
++      extract(makeArchive('zip')),
++      throwsA(
++        isA<ArchiveExtractionFailure>().having(
++          (e) => e.isPartial,
++          'partial',
++          false,
++        ),
++      ),
++    );
++    expect(preserved.readAsStringSync(), 'KEEP');
++    expect(File(p.join(blocked.path, 'second.txt')).existsSync(), false);
++  });
++  test('direct ZIP extraction succeeds with ordinary nested outputs', () async {
++    await ArchiveService.extractArchive(
++      archivePath: makeArchive('zip').path,
++      destinationDir: destination.path,
++    );
++    expect(
++      File(p.join(destination.path, 'first.txt')).readAsStringSync(),
++      'FIRST',
++    );
++    expect(
++      File(p.join(blocked.path, 'second.txt')).readAsStringSync(),
++      'SECOND',
++    );
++  });
++  test(
++    'selected destination alias retains normal extraction behavior',
++    () async {
++      final alias = Link(p.join(fixture.path, 'destination-alias'))
++        ..createSync(destination.path);
++      await ArchiveExtraction.extract(
++        archivePath: makeArchive('zip').path,
++        destinationDir: alias.path,
++      );
++      expect(
++        File(p.join(destination.path, 'first.txt')).readAsStringSync(),
++        'FIRST',
++      );
++      expect(
++        File(p.join(blocked.path, 'second.txt')).readAsStringSync(),
++        'SECOND',
++      );
++    },
++  );
++  test(
++    'background TAR extraction succeeds with ordinary nested outputs',
++    () async {
++      expect((await worker(makeArchive('tar').path))['status'], 'completed');
++      expect(
++        File(p.join(destination.path, 'first.txt')).readAsStringSync(),
++        'FIRST',
++      );
++      expect(
++        File(p.join(blocked.path, 'second.txt')).readAsStringSync(),
++        'SECOND',
++      );
++    },
++  );
++  for (final format in ['zip', 'tar']) {
++    test(
++      '$format partial publication retains created nested directories',
++      () async {
++        final input = makeArchive(format, nested: true);
++        denySecondOutputWrites();
++        await expectLater(
++          extract(input),
++          throwsA(
++            isA<ArchiveExtractionFailure>().having(
++              (e) => e.isPartial,
++              'partial',
++              true,
++            ),
++          ),
++        );
++        expect(
++          File(
++            p.join(destination.path, 'created/sub/first.txt'),
++          ).readAsStringSync(),
++          'FIRST',
++        );
++        expect(blocked.existsSync(), true);
++      },
++    );
++  }
++  test(
++    'foreign file replacing a published pathname is never rolled back',
++    () async {
++      final input = makeArchive('zip');
++      final target = File(p.join(destination.path, 'first.txt'));
++      await expectLater(
++        extract(
++          input,
++          hook: (phase, published) async {
++            if (phase == 'published' && published.contains(target.path)) {
++              target.deleteSync();
++              target.writeAsStringSync(
++                'USER REPLACEMENT WITH DIFFERENT LENGTH',
++              );
++              throw StateError('injected later failure');
++            }
++          },
++        ),
++        throwsA(isA<ArchiveExtractionFailure>()),
++      );
++      expect(
++        target.readAsStringSync(),
++        'USER REPLACEMENT WITH DIFFERENT LENGTH',
++      );
++    },
++  );
++  test(
++    'foreign replacement directory is never removed after publication',
++    () async {
++      final input = makeArchive('zip', directory: true);
++      final path = p.join(destination.path, 'marked');
++      await expectLater(
++        extract(
++          input,
++          hook: (phase, published) async {
++            if (phase == 'published' && Directory(path).existsSync()) {
++              Directory(path).renameSync(p.join(fixture.path, 'moved'));
++              Directory(path).createSync();
++              throw StateError('injected failure');
++            }
++          },
++        ),
++        throwsA(isA<ArchiveExtractionFailure>()),
++      );
++      expect(Directory(path).existsSync(), true);
++    },
++  );
++  test('publication never follows a substituted symlink parent', () async {
++    final input = makeArchive('zip', nested: true);
++    final outside = Directory(p.join(fixture.path, 'outside'))..createSync();
++    final protected = File(p.join(outside.path, 'first.txt'))
++      ..writeAsStringSync('USER FILE OUTSIDE DESTINATION');
++    await expectLater(
++      extract(
++        input,
++        hook: (phase, _) async {
++          if (phase == 'publishing') {
++            Directory(p.join(destination.path, 'created')).createSync();
++            Link(
++              p.join(destination.path, 'created/sub'),
++            ).createSync(outside.path);
++          }
++        },
++      ),
++      throwsA(isA<ArchiveExtractionFailure>()),
++    );
++    expect(protected.readAsStringSync(), 'USER FILE OUTSIDE DESTINATION');
++  });
++  test('staging failure publishes nothing and permits clean retry', () async {
++    final input = makeArchive('zip');
++    var count = 0;
++    await expectLater(
++      extract(
++        input,
++        hook: (phase, _) async {
++          if (phase == 'staging' && ++count == 2) {
++            throw StateError('injected staging write failure');
++          }
++        },
++      ),
++      throwsA(
++        isA<ArchiveExtractionFailure>().having(
++          (e) => e.publishedPaths,
++          'published',
++          isEmpty,
++        ),
++      ),
++    );
++    expect(File(p.join(destination.path, 'first.txt')).existsSync(), false);
++    await extract(input);
++    expect(
++      File(p.join(destination.path, 'first.txt')).readAsStringSync(),
++      'FIRST',
++    );
++  });
++  test('anonymous staging cleanup only closes its exact owned inode', () {
++    final staged = ArchivePrivateFile();
++    final livePath = staged.path;
++    File(livePath).writeAsStringSync('PRIVATE');
++    final foreign = File(p.join(destination.path, 'foreign'))
++      ..writeAsStringSync('KEEP');
++    staged.close();
++    staged.close();
++    expect(File(livePath).existsSync(), false);
++    expect(foreign.readAsStringSync(), 'KEEP');
++  });
++  test(
++    'anonymous staging allocation failure leaves destination untouched',
++    () async {
++      final input = makeArchive('zip');
++      final privateTemp = Directory(p.join(fixture.path, 'private-temp'))
++        ..createSync();
++      expect(Process.runSync('chmod', ['0555', privateTemp.path]).exitCode, 0);
++      try {
++        await IOOverrides.runZoned(() async {
++          await expectLater(
++            extract(input),
++            throwsA(
++              isA<ArchiveExtractionFailure>().having(
++                (e) => e.publishedPaths,
++                'published',
++                isEmpty,
++              ),
++            ),
++          );
++        }, getSystemTempDirectory: () => privateTemp);
++        expect(File(p.join(destination.path, 'first.txt')).existsSync(), false);
++      } finally {
++        Process.runSync('chmod', ['0755', privateTemp.path]);
++      }
++    },
++  );
++  test(
++    'new destination root remains reported when later publication collides',
++    () async {
++      final input = makeArchive('zip');
++      destination.deleteSync(recursive: true);
++      final target = File(p.join(destination.path, 'first.txt'));
++      await expectLater(
++        extract(
++          input,
++          hook: (phase, _) async {
++            if (phase == 'publishing') target.writeAsStringSync('RACE WINNER');
++          },
++        ),
++        throwsA(
++          isA<ArchiveExtractionFailure>().having(
++            (e) => e.publishedPaths,
++            'root published',
++            contains(destination.path),
++          ),
++        ),
++      );
++      expect(destination.existsSync(), true);
++      expect(target.readAsStringSync(), 'RACE WINNER');
++    },
++  );
++  test('successful staging leaves no ownership marker pathnames', () async {
++    await extract(makeArchive('zip', nested: true));
++    expect(
++      destination
++          .listSync(recursive: true)
++          .where((e) => p.basename(e.path).startsWith('.fiyora-')),
++      isEmpty,
++    );
++  });
++  test(
++    'another actor file inside a published directory is preserved',
++    () async {
++      final input = makeArchive('zip', directory: true);
++      final external = File(
++        p.join(destination.path, 'marked/added-by-user.txt'),
++      );
++      await expectLater(
++        extract(
++          input,
++          hook: (phase, published) async {
++            if (phase == 'published') {
++              external.writeAsStringSync('KEEP USER FILE');
++              throw StateError('injected failure');
++            }
++          },
++        ),
++        throwsA(isA<ArchiveExtractionFailure>()),
++      );
++      expect(external.readAsStringSync(), 'KEEP USER FILE');
++    },
++  );
++  test('noteFileWritten must not adopt a foreign file as owned', () async {
++    final target = File(
++      p.join(destination.path, 'replaced-between-create-and-note.txt'),
++    );
++    final archive = Archive()
++      ..addFile(ArchiveFile(p.basename(target.path), 5, utf8.encode('FIRST')));
++    final input = File(p.join(fixture.path, 'adoption.zip'))
++      ..writeAsBytesSync(ZipEncoder().encode(archive)!);
++    await expectLater(
++      extract(
++        input,
++        hook: (phase, _) async {
++          if (phase == 'published') {
++            // Reproduce foreign replacement after creation, before error cleanup.
++            // There is no note/adoption step and no destination rollback anymore.
++            target.deleteSync();
++            target.writeAsStringSync('FOREIGN OWNER DATA');
++            throw StateError('injected later failure');
++          }
++        },
++      ),
++      throwsA(isA<ArchiveExtractionFailure>()),
++    );
++    expect(target.readAsStringSync(), 'FOREIGN OWNER DATA');
++  });
++  test(
++    'a copied marker does not establish replacement directory ownership',
++    () async {
++      final path = p.join(destination.path, 'marked');
++      final input = makeArchive('zip', directory: true);
++      await expectLater(
++        extract(
++          input,
++          hook: (phase, _) async {
++            if (phase == 'published') {
++              final original = Directory(
++                path,
++              ).renameSync(p.join(fixture.path, 'original-marked'));
++              final tokenMarker = File(
++                p.join(original.path, '.fiyora-extract-rollback-forged'),
++              )..writeAsStringSync('copied token');
++              Directory(path).createSync();
++              File(
++                p.join(path, p.basename(tokenMarker.path)),
++              ).writeAsBytesSync(tokenMarker.readAsBytesSync());
++              throw StateError('injected later failure');
++            }
++          },
++        ),
++        throwsA(isA<ArchiveExtractionFailure>()),
++      );
++      final foreign = Directory(path);
++      expect(foreign.existsSync(), true);
++    },
++  );
++  test(
++    'exclusive publication collision between preflight and create preserves foreign data',
++    () async {
++      final target = File(p.join(destination.path, 'first.txt'));
++      await expectLater(
++        extract(
++          makeArchive('zip'),
++          hook: (phase, _) async {
++            if (phase == 'publishing') target.writeAsStringSync('RACE WINNER');
++          },
++        ),
++        throwsA(
++          isA<ArchiveExtractionFailure>().having(
++            (e) => e.publishedPaths,
++            'published',
++            isEmpty,
++          ),
++        ),
++      );
++      expect(target.readAsStringSync(), 'RACE WINNER');
++    },
++  );
++  test(
++    'retry after partial publish refuses collision and preserves previous outputs',
++    () async {
++      final input = makeArchive('zip');
++      await expectLater(
++        extract(
++          input,
++          hook: (phase, _) async {
++            if (phase == 'published') {
++              throw StateError('injected partial failure');
++            }
++          },
++        ),
++        throwsA(
++          isA<ArchiveExtractionFailure>().having(
++            (e) => e.isPartial,
++            'partial',
++            true,
++          ),
++        ),
++      );
++      await expectLater(
++        extract(input),
++        throwsA(isA<ArchiveExtractionFailure>()),
++      );
++      expect(
++        File(p.join(destination.path, 'first.txt')).readAsStringSync(),
++        'FIRST',
++      );
++      expect(File(p.join(blocked.path, 'second.txt')).existsSync(), false);
++    },
++  );
++  for (final phaseToCancel in ['staging', 'published']) {
++    test(
++      'cancel during $phaseToCancel preserves all published outputs',
++      () async {
++        var cancelled = false;
++        final input = makeArchive('zip');
++        await expectLater(
++          extract(
++            input,
++            cancelled: () => cancelled,
++            hook: (phase, _) async {
++              if (phase == phaseToCancel) cancelled = true;
++            },
++          ),
++          throwsA(
++            isA<ArchiveExtractionFailure>()
++                .having((e) => e.cancelled, 'cancelled', true)
++                .having(
++                  (e) => e.isPartial,
++                  'partial',
++                  phaseToCancel == 'published',
++                ),
++          ),
++        );
++        expect(
++          File(p.join(destination.path, 'first.txt')).existsSync(),
++          phaseToCancel == 'published',
++        );
++      },
++    );
++  }
++}
+diff --git a/test/archive_source_cleanup_reporting_test.dart b/test/archive_source_cleanup_reporting_test.dart
+new file mode 100644
+index 0000000000000000000000000000000000000000..7591f701520fcd6e589a3f362d2a96cbbe3f34e5
+--- /dev/null
++++ b/test/archive_source_cleanup_reporting_test.dart
+@@ -0,0 +1,381 @@
++import 'dart:convert';
++import 'dart:io';
++import 'dart:isolate';
++
++import 'package:archive/archive_io.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:nfile/services/archive_creation_outcome.dart';
++import 'package:nfile/services/archive_service.dart';
++import 'package:nfile/services/background_archive_service.dart';
++import 'package:path/path.dart' as p;
++
++final class _NativeIO extends IOOverrides {}
++
++void main() {
++  TestWidgetsFlutterBinding.ensureInitialized();
++  late Directory fixture;
++  late Directory locked;
++  late Directory output;
++  late File source;
++
++  setUp(() {
++    fixture = Directory.systemTemp.createTempSync('ar015_');
++    locked = Directory(p.join(fixture.path, 'locked'))..createSync();
++    output = Directory(p.join(fixture.path, 'output'))..createSync();
++    source = File(p.join(locked.path, 'source.txt'))
++      ..writeAsStringSync('SOURCE');
++  });
++
++  tearDown(() {
++    Process.runSync('chmod', ['0755', locked.path]);
++    fixture.deleteSync(recursive: true);
++  });
++
++  void denySourceDeletion() {
++    final result = Process.runSync('chmod', ['0555', locked.path]);
++    expect(result.exitCode, 0, reason: result.stderr.toString());
++    // Verify the fixture really denies deletion on this executor.
++    final probe = File(p.join(locked.path, 'source.txt'));
++    expect(() => probe.deleteSync(), throwsA(isA<FileSystemException>()));
++    expect(source.readAsStringSync(), 'SOURCE');
++  }
++
++  Future<Map> compressInWorker(List<String> sources, String destination) async {
++    final port = ReceivePort();
++    Isolate? worker;
++    try {
++      worker = await Isolate.spawn(
++        BackgroundArchiveService.compressIsolateTask,
++        <String, dynamic>{
++          'sendPort': port.sendPort,
++          'sourcePaths': sources,
++          'destinationPath': destination,
++          'format': 'zip',
++          'level': 6,
++          'deleteSource': true,
++        },
++      );
++      return await port
++              .firstWhere(
++                (event) =>
++                    event is Map &&
++                    ['completed', 'partial', 'error'].contains(event['status']),
++              )
++              .timeout(const Duration(seconds: 30))
++          as Map;
++    } finally {
++      worker?.kill(priority: Isolate.immediate);
++      port.close();
++    }
++  }
++
++  Future<T> withInaccessibleCleanupMetadata<T>(
++    String destination,
++    Future<T> Function() operation,
++  ) async {
++    final native = _NativeIO();
++    var failedLookups = 0;
++    final result = await IOOverrides.runZoned(
++      () async {
++        final result = await operation();
++        // Prove this fixture represents denied metadata access, not an absent
++        // source. typeSync may collapse that failure to notFound on real I/O.
++        expect(
++          () => FileStat.statSync(source.path),
++          throwsA(isA<FileSystemException>()),
++        );
++        return result;
++      },
++      fseGetTypeSync: (path, followLinks) {
++        if (path == source.path && File(destination).existsSync()) {
++          failedLookups++;
++          return FileSystemEntityType.notFound;
++        }
++        return native.fseGetTypeSync(path, followLinks);
++      },
++      statSync: (path) {
++        if (path == source.path && File(destination).existsSync()) {
++          throw FileSystemException(
++            'Permission denied',
++            path,
++            const OSError('Permission denied', 13),
++          );
++        }
++        return native.statSync(path);
++      },
++    );
++    expect(failedLookups, greaterThan(0));
++    return result;
++  }
++
++  void expectArchiveRetained(String destination) {
++    final archive = ZipDecoder().decodeBytes(
++      File(destination).readAsBytesSync(),
++    );
++    expect(
++      utf8.decode(
++        archive.files.firstWhere((entry) => entry.name == 'source.txt').content
++            as List<int>,
++      ),
++      'SOURCE',
++    );
++    expect(source.readAsStringSync(), 'SOURCE');
++  }
++
++  test(
++    'direct cleanup cannot report completed when source metadata is inaccessible',
++    () async {
++      final destination = p.join(output.path, 'metadata.zip');
++      final result = await withInaccessibleCleanupMetadata(
++        destination,
++        () => ArchiveService.createArchive(
++          sourcePaths: [source.path],
++          destinationDir: output.path,
++          archiveName: 'metadata',
++          format: 'zip',
++          compressionLevel: 6,
++          deleteSource: true,
++          separateArchives: false,
++        ),
++      );
++      expect(result.archiveCreated, isTrue);
++      expect(result.isPartial, isTrue);
++      expect(result.sourceCleanupFailures.single.path, source.path);
++      expect(result.toWorkerMessage()['status'], 'partial');
++      expectArchiveRetained(destination);
++    },
++  );
++
++  test(
++    'worker cleanup cannot report completed when source metadata is inaccessible',
++    () async {
++      final destination = p.join(output.path, 'worker-metadata.zip');
++      final port = ReceivePort();
++      try {
++        final terminal = port
++            .firstWhere(
++              (event) =>
++                  event is Map &&
++                  ['completed', 'partial', 'error'].contains(event['status']),
++            )
++            .timeout(const Duration(seconds: 30));
++        // Execute the worker entrypoint in this zone because IOOverrides are
++        // isolate-local. Other tests above still spawn the real worker isolate.
++        await withInaccessibleCleanupMetadata(
++          destination,
++          () => BackgroundArchiveService.compressIsolateTask({
++            'sendPort': port.sendPort,
++            'sourcePaths': [source.path],
++            'destinationPath': destination,
++            'format': 'zip',
++            'level': 6,
++            'deleteSource': true,
++          }),
++        );
++        final result = await terminal as Map;
++        expect(result['status'], 'partial', reason: '$result');
++        expect(result['archiveCreated'], isTrue);
++        expect(
++          (result['sourceCleanupFailures'] as List).single['path'],
++          source.path,
++        );
++        expectArchiveRetained(destination);
++      } finally {
++        port.close();
++      }
++    },
++  );
++
++  test(
++    'direct creation reports cleanup failure without hiding archive success',
++    () async {
++      denySourceDeletion();
++      // Dynamic tear-off permits this test to exercise the old Future<void> API
++      // before the typed result exists: baseline returns null/full success.
++      final dynamic create = ArchiveService.createArchive;
++      final dynamic result = await create(
++        sourcePaths: [source.path],
++        destinationDir: output.path,
++        archiveName: 'created',
++        format: 'zip',
++        compressionLevel: 6,
++        deleteSource: true,
++        separateArchives: false,
++      );
++      expect(
++        result,
++        isNotNull,
++        reason: 'Cleanup failure requires an explicit outcome',
++      );
++      expect(result.archiveCreated, isTrue);
++      expect(result.isPartial, isTrue);
++      expect(result.sourceCleanupFailures.single.path, source.path);
++      expect(result.message, contains('could not be removed'));
++      expect(result.message, isNot(contains('created successfully')));
++      expectArchiveRetained(p.join(output.path, 'created.zip'));
++    },
++  );
++
++  test(
++    'worker reports partial instead of error/completed after cleanup failure',
++    () async {
++      denySourceDeletion();
++      final destination = p.join(output.path, 'worker.zip');
++      final result = await compressInWorker([source.path], destination);
++      expect(result['status'], 'partial', reason: '$result');
++      expect(result['archiveCreated'], isTrue);
++      expect(
++        (result['sourceCleanupFailures'] as List).single['path'],
++        source.path,
++      );
++      expect(result['archivePaths'], [destination]);
++      expect(result['reason'], 'sourceCleanupFailed');
++      expectArchiveRetained(destination);
++    },
++  );
++
++  test(
++    'direct mixed cleanup reports every failed source and continues once',
++    () async {
++      denySourceDeletion();
++      final removable = File(p.join(fixture.path, 'removable.txt'))
++        ..writeAsStringSync('REMOVE');
++      final result = await ArchiveService.createArchive(
++        sourcePaths: [source.path, removable.path],
++        destinationDir: output.path,
++        archiveName: 'mixed',
++        format: 'zip',
++        compressionLevel: 6,
++        deleteSource: true,
++        separateArchives: false,
++      );
++      expect(result.isPartial, isTrue);
++      expect(result.sourceCleanupFailures.map((f) => f.path), [source.path]);
++      expect(removable.existsSync(), isFalse);
++      expectArchiveRetained(p.join(output.path, 'mixed.zip'));
++    },
++  );
++
++  test(
++    'worker mixed cleanup does not lose archive success or untouched source',
++    () async {
++      denySourceDeletion();
++      final removable = File(p.join(fixture.path, 'removable.txt'))
++        ..writeAsStringSync('REMOVE');
++      final destination = p.join(output.path, 'mixed-worker.zip');
++      final result = await compressInWorker([
++        source.path,
++        removable.path,
++      ], destination);
++      expect(result['status'], 'partial');
++      expect((result['sourceCleanupFailures'] as List).length, 1);
++      expect(removable.existsSync(), isFalse);
++      expectArchiveRetained(destination);
++    },
++  );
++
++  test(
++    'separate archives retain all created outputs after a cleanup failure',
++    () async {
++      denySourceDeletion();
++      final removable = File(p.join(fixture.path, 'removable.txt'))
++        ..writeAsStringSync('REMOVE');
++      final result = await ArchiveService.createArchive(
++        sourcePaths: [source.path, removable.path],
++        destinationDir: output.path,
++        archiveName: 'unused',
++        format: 'zip',
++        compressionLevel: 6,
++        deleteSource: true,
++        separateArchives: true,
++      );
++      expect(result.archivePaths, [
++        p.join(output.path, 'source.zip'),
++        p.join(output.path, 'removable.zip'),
++      ]);
++      expect(
++        result.archivePaths.every((path) => File(path).existsSync()),
++        isTrue,
++      );
++      expect(result.isPartial, isTrue);
++      expect(result.sourceCleanupFailures.single.path, source.path);
++      expect(removable.existsSync(), isFalse);
++      expectArchiveRetained(p.join(output.path, 'source.zip'));
++    },
++  );
++
++  test(
++    'deleteSource false never attempts cleanup and retains ordinary success',
++    () async {
++      denySourceDeletion();
++      final result = await ArchiveService.createArchive(
++        sourcePaths: [source.path],
++        destinationDir: output.path,
++        archiveName: 'keep',
++        format: 'zip',
++        compressionLevel: 6,
++        deleteSource: false,
++        separateArchives: false,
++      );
++      expect(result.archiveCreated, isTrue);
++      expect(result.isPartial, isFalse);
++      expect(result.sourceCleanupFailures, isEmpty);
++      expect(result.toWorkerMessage()['status'], 'completed');
++      expectArchiveRetained(p.join(output.path, 'keep.zip'));
++    },
++  );
++
++  test(
++    'direct retry is explicit and never overwrites the retained archive',
++    () async {
++      denySourceDeletion();
++      Future<ArchiveCreationOutcome> create(String name) =>
++          ArchiveService.createArchive(
++            sourcePaths: [source.path],
++            destinationDir: output.path,
++            archiveName: name,
++            format: 'zip',
++            compressionLevel: 6,
++            deleteSource: true,
++            separateArchives: false,
++          );
++      expect((await create('first')).isPartial, isTrue);
++      final preserved = File(
++        p.join(output.path, 'first.zip'),
++      ).readAsBytesSync();
++      Process.runSync('chmod', ['0755', locked.path]);
++      await expectLater(create('first'), throwsA(isA<FileSystemException>()));
++      expect(source.readAsStringSync(), 'SOURCE');
++      final next = await create('retry');
++      expect(next.isPartial, isFalse);
++      expect(source.existsSync(), isFalse);
++      expect(
++        File(p.join(output.path, 'first.zip')).readAsBytesSync(),
++        preserved,
++      );
++    },
++  );
++
++  test(
++    'worker retry preserves earlier archive and only cleans on explicit new output',
++    () async {
++      denySourceDeletion();
++      final first = p.join(output.path, 'first.zip');
++      expect(
++        (await compressInWorker([source.path], first))['status'],
++        'partial',
++      );
++      final preserved = File(first).readAsBytesSync();
++      Process.runSync('chmod', ['0755', locked.path]);
++      expect((await compressInWorker([source.path], first))['status'], 'error');
++      expect(source.readAsStringSync(), 'SOURCE');
++      final next = await compressInWorker([
++        source.path,
++      ], p.join(output.path, 'retry.zip'));
++      expect(next['status'], 'completed');
++      expect(next['sourceCleanupFailures'], isEmpty);
++      expect(source.existsSync(), isFalse);
++      expect(File(first).readAsBytesSync(), preserved);
++    },
++  );
++}
+diff --git a/test/archive_source_destination_safety_test.dart b/test/archive_source_destination_safety_test.dart
+index 3792536944ddbe66d50849e71a568a1b4e29cddd..da47276b105330408b1d4a475ded7f41ad28a0a3 100644
+--- a/test/archive_source_destination_safety_test.dart
++++ b/test/archive_source_destination_safety_test.dart
+@@ -54,7 +54,8 @@ Future<void> _background(
+     );
+     final result = await messages
+         .firstWhere((event) {
+-          return event is! Map || event['status'] != 'progress';
++          return event is! Map ||
++              const {'completed', 'error', 'partial', 'cancelled'}.contains(event['status']);
+         })
+         .timeout(const Duration(seconds: 20));
+     if (result is! Map || result['status'] != 'completed') {
