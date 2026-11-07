@@ -1,4 +1,4 @@
-name: FIYORA Beta Candidate (internal artifact only)
+name: FIYORA Beta Candidate (signed ARM64, artifact only)
 on:
   push:
     branches:
@@ -8,12 +8,12 @@ on:
 permissions:
   contents: read
 jobs:
-  beta_candidate:
-    name: Build FIYORA beta ARM64 APK
+  signed_arm64_beta:
+    name: Build signed FIYORA Beta ARM64 APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - name: Checkout protected beta baseline
+      - name: Checkout beta candidate workspace
         uses: actions/checkout@v4
       - name: Restore exact reviewed five-AR source
         shell: bash
@@ -25,7 +25,15 @@ jobs:
           ACTUAL="$(git write-tree)"
           echo "Resulting source tree: $ACTUAL"
           test "$ACTUAL" = "ae349535b46686485d71d8824cdf17bac2dac475"
-          echo "Exact FIYORA HEAD cf6a0dd source verified"
+          grep -Fq 'applicationId = "com.noirero.fiyora.preview"' android/app/build.gradle.kts
+          grep -Fq 'android:label="Fiyora Explorer Beta"' android/app/src/main/AndroidManifest.xml
+          echo "Exact FIYORA five-AR HEAD cf6a0dd source verified"
+      - name: Set build number for upgradable signed beta
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Official beta workflow used 200000 + run number. Keep new release above it.
+          echo "BUILD_NUMBER=$((300000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -42,39 +50,58 @@ jobs:
       - name: Apply existing flutter_avif_android duplicate-class workaround
         shell: bash
         run: |
-          FILE="$(find "$HOME/.pub-cache" -name FlutterAvifPlugin.java 2>/dev/null | head -1 || true)"
+          set -euo pipefail
+          FILE="$(find "$HOME/.pub-cache" -name FlutterAvifPlugin.java -print -quit 2>/dev/null || true)"
           if [ -n "$FILE" ]; then
-            printf '%s\n' '// Workaround for duplicate Kotlin plugin class' > "$FILE"
+            echo '// Workaround: duplicate class conflicts with Kotlin plugin.' > "$FILE"
           fi
-      - name: Configure optional beta signing
-        id: signing
+      - name: Configure official FIYORA Beta signing
         shell: bash
         env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEYSTORE_BASE64: ${{ secrets.MRARE_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.MRARE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.MRARE_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.MRARE_STORE_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ] && [ -n "$STORE_PASSWORD" ]; then
-            echo "$KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
-            printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=upload-keystore.jks\n' "$STORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > android/key.properties
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Build signed beta ARM64 release APK
-        if: steps.signing.outputs.available == 'true'
-        run: flutter build apk --release --split-per-abi --target-platform android-arm64 --no-tree-shake-icons
-      - name: Build internal ARM64 debug APK if signing unavailable
-        if: steps.signing.outputs.available != 'true'
-        run: flutter build apk --debug --target-platform android-arm64
-      - name: Upload beta APK artifact (never publish a release)
+          for value in "$KEYSTORE_BASE64" "$KEY_ALIAS" "$KEY_PASSWORD" "$STORE_PASSWORD"; do
+            test -n "$value" || { echo 'Official FIYORA Beta signing secrets unavailable; refusing unsigned or debug build'; exit 1; }
+          done
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/fiyora-signing.jks
+          {
+            printf 'storePassword=%s\n' "$STORE_PASSWORD"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'storeFile=fiyora-signing.jks\n'
+          } > android/key.properties
+          chmod 600 android/key.properties android/app/fiyora-signing.jks
+      - name: Build optimized signed release ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build apk --release --split-per-abi --target-platform android-arm64 --build-number "$BUILD_NUMBER" --no-tree-shake-icons
+      - name: Verify signature, ARM64, package, and record size
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          test -s "$APK"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n1)"
+          AAPT="$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n1)"
+          test -x "$APKSIGNER" && test -x "$AAPT"
+          "$APKSIGNER" verify --print-certs "$APK"
+          "$AAPT" dump badging "$APK" | grep -Fq "package: name='com.noirero.fiyora.preview'"
+          ABIS="$(unzip -Z1 "$APK" | sed -n 's#^lib/\([^/]*\)/.*#\1#p' | sort -u)"
+          test "$ABIS" = arm64-v8a || { echo "Unexpected ABI(s): $ABIS"; exit 1; }
+          mkdir -p dist
+          cp "$APK" dist/FIYORA-beta-cf6a0dd-signed-arm64-v8a.apk
+          (cd dist && sha256sum *.apk > SHA256SUMS.txt)
+          du -h dist/*.apk
+          cat dist/SHA256SUMS.txt
+      - name: Upload signed beta APK (internal artifact only, no release)
         uses: actions/upload-artifact@v4
         with:
-          name: FIYORA-beta-cf6a0dd-ARM64-${{ steps.signing.outputs.available == 'true' && 'signed-release' || 'debug' }}
-          path: |
-            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-            build/app/outputs/flutter-apk/app-debug.apk
+          name: FIYORA-beta-cf6a0dd-signed-ARM64
+          path: dist/
           if-no-files-found: error
           retention-days: 14
