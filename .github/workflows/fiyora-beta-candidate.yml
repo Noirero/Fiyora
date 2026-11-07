@@ -1,0 +1,80 @@
+name: FIYORA Beta Candidate (internal artifact only)
+on:
+  push:
+    branches:
+      - ci/fiyora-beta-cf6a0dd
+    paths:
+      - .github/workflows/fiyora-beta-candidate.yml
+permissions:
+  contents: read
+jobs:
+  beta_candidate:
+    name: Build FIYORA beta ARM64 APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout protected beta baseline
+        uses: actions/checkout@v4
+      - name: Restore exact reviewed five-AR source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --index --check .fiyora-ci/FIYORA_FINAL_cf6a0dd.patch
+          git apply --index .fiyora-ci/FIYORA_FINAL_cf6a0dd.patch
+          git rm --cached -q .fiyora-ci/FIYORA_FINAL_cf6a0dd.patch .github/workflows/fiyora-beta-candidate.yml
+          ACTUAL="$(git write-tree)"
+          echo "Resulting source tree: $ACTUAL"
+          test "$ACTUAL" = "ae349535b46686485d71d8824cdf17bac2dac475"
+          echo "Exact FIYORA HEAD cf6a0dd source verified"
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+      - name: Set up Flutter 3.44.0
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.0'
+          channel: stable
+          cache: true
+      - name: Restore locked Dart dependencies
+        run: flutter pub get --enforce-lockfile
+      - name: Apply existing flutter_avif_android duplicate-class workaround
+        shell: bash
+        run: |
+          FILE="$(find "$HOME/.pub-cache" -name FlutterAvifPlugin.java 2>/dev/null | head -1 || true)"
+          if [ -n "$FILE" ]; then
+            printf '%s\n' '// Workaround for duplicate Kotlin plugin class' > "$FILE"
+          fi
+      - name: Configure optional beta signing
+        id: signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ] && [ -n "$STORE_PASSWORD" ]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
+            printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=upload-keystore.jks\n' "$STORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > android/key.properties
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build signed beta ARM64 release APK
+        if: steps.signing.outputs.available == 'true'
+        run: flutter build apk --release --split-per-abi --target-platform android-arm64 --no-tree-shake-icons
+      - name: Build internal ARM64 debug APK if signing unavailable
+        if: steps.signing.outputs.available != 'true'
+        run: flutter build apk --debug --target-platform android-arm64
+      - name: Upload beta APK artifact (never publish a release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: FIYORA-beta-cf6a0dd-ARM64-${{ steps.signing.outputs.available == 'true' && 'signed-release' || 'debug' }}
+          path: |
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
