@@ -74,14 +74,15 @@ jobs:
           git fetch --no-tags origin "refs/tags/${TESTED_BETA_TAG}:refs/tags/${TESTED_BETA_TAG}"
           BETA_SHA="$(git rev-parse "${TESTED_BETA_TAG}^{commit}")"
 
-          # The manual beta workflow runs from main and checks out apk-beta.
-          # Confirm prerelease describes the tagged source and the originating manual run.
+          # The manual beta workflow must run on apk-beta at the exact tagged commit.
+          # Confirm prerelease describes that source and the originating manual run.
           echo "$RELEASE" | jq -e --arg sha "$BETA_SHA" '
             (.body | contains("Source commit: `" + $sha + "`"))' >/dev/null
           CI_RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${BETA_RUN_ID}/attempts/${BETA_RUN_ATTEMPT}")"
-          echo "$CI_RUN" | jq -e '
+          echo "$CI_RUN" | jq -e --arg sha "$BETA_SHA" '
             .event == "workflow_dispatch" and
-            .head_branch == "main" and
+            .head_branch == "apk-beta" and
+            .head_sha == $sha and
             .conclusion == "success" and
             .path == ".github/workflows/beta.yml"' >/dev/null
 
