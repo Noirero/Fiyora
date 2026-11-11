@@ -146,13 +146,12 @@ class DiagnosticLogger {
 
   String _safeCode(Object? value) {
     final s = value is String ? value : 'unavailable';
-    return s.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '').substring(
-      0, s.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '').length.clamp(0, 48),
-    );
+    final safe = s.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '');
+    return safe.length <= 48 ? safe : safe.substring(0, 48);
   }
 
   String _line(String event) =>
-      '${DateTime.now().toUtc().toIso8601String()}Z | $event\n';
+      '${DateTime.now().toUtc().toIso8601String()} | $event\n';
 
   bool startManual() {
     if (_dir == null) return false;
@@ -280,7 +279,7 @@ class DiagnosticLogger {
     await destination.create(recursive: true);
     final name = crash ? 'crash' : 'manual';
     final stamp = DateTime.now().toUtc().millisecondsSinceEpoch;
-    return source.copy('${destination.path}/FIYORA_$name\_$stamp.txt');
+    return source.copy(destination.path + '/FIYORA_' + name + '_' + stamp.toString() + '.txt');
   }
 
   void _appendBounded(File target, String entry, int limit) {
