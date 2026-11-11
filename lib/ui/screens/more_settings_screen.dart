@@ -11,6 +11,7 @@ import '../../services/recycle_bin_service.dart';
 import 'package:path/path.dart' as p;
 import 'internal_file_picker_screen.dart';
 import 'backup_settings_screen.dart';
+import 'diagnostics_screen.dart';
 import '../../services/settings_backup_service.dart';
 
 class MoreSettingsScreen extends StatefulWidget {
@@ -361,6 +362,14 @@ class _MoreSettingsScreenState extends State<MoreSettingsScreen> {
                   title: 'Backup & Restore',
                   subtitle: 'Backup your settings to a JSON file or restore them',
                   targetScreen: const BackupSettingsScreen(),
+                ),
+                _buildCategoryCard(
+                  context,
+                  theme,
+                  icon: Icons.bug_report_outlined,
+                  title: 'Diagnostic Logger',
+                  subtitle: 'Record a session or export a recovered crash report',
+                  targetScreen: const DiagnosticsScreen(),
                 ),
               ] else ...[
                 if (!hasAnyMatch) ...[
