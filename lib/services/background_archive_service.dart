@@ -504,7 +504,12 @@ class BackgroundArchiveService {
     final destinationDir = args['destinationDir'] as String;
     final password = args['password'] as String?;
 
+    void reportStage(DiagnosticArchivePhase phase) {
+      sendPort.send({'status': 'diagnostic', 'phase': phase.name});
+    }
+
     try {
+      reportStage(DiagnosticArchivePhase.sourceCheck);
       ArchiveFormatSupport.requireExtractable(archivePath, background: true);
       sendPort.send({'status': 'progress', 'progress': 0.0, 'currentFile': 'Reading archive...'});
 
@@ -514,13 +519,16 @@ class BackgroundArchiveService {
         return;
       }
       final lowerPath = archivePath.toLowerCase();
+      reportStage(DiagnosticArchivePhase.decoding);
 
       // stream zip files to avoid OOM
       if (lowerPath.endsWith('.zip') || lowerPath.contains('.zip.')) {
         sendPort.send({'status': 'progress', 'progress': 0.1, 'currentFile': 'Opening zip...'});
         final inputStream = InputFileStream(archivePath);
         final archive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
+        reportStage(DiagnosticArchivePhase.validatePaths);
         validateArchiveExtractionPlan(destinationDir, archive.files);
+        reportStage(DiagnosticArchivePhase.writingOutput);
         final totalFiles = archive.length;
         
         for (int i = 0; i < totalFiles; i++) {
@@ -563,7 +571,9 @@ class BackgroundArchiveService {
         sendPort.send({'status': 'progress', 'progress': 0.3, 'currentFile': 'Extracting tar...'});
         final tarInputStream = InputFileStream(tempTarFile.path);
         final archive = TarDecoder().decodeBuffer(tarInputStream);
+        reportStage(DiagnosticArchivePhase.validatePaths);
         validateArchiveExtractionPlan(destinationDir, archive.files);
+        reportStage(DiagnosticArchivePhase.writingOutput);
         final totalFiles = archive.length;
         
         for (int i = 0; i < totalFiles; i++) {
@@ -601,7 +611,9 @@ class BackgroundArchiveService {
         sendPort.send({'status': 'progress', 'progress': 0.1, 'currentFile': 'Opening tar...'});
         final inputStream = InputFileStream(archivePath);
         final archive = TarDecoder().decodeBuffer(inputStream);
+        reportStage(DiagnosticArchivePhase.validatePaths);
         validateArchiveExtractionPlan(destinationDir, archive.files);
+        reportStage(DiagnosticArchivePhase.writingOutput);
         final totalFiles = archive.length;
         
         for (int i = 0; i < totalFiles; i++) {
@@ -647,6 +659,7 @@ class BackgroundArchiveService {
       } else if (lowerPath.endsWith('.gz')) {
         final decodedBytes = GZipDecoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
+        reportStage(DiagnosticArchivePhase.writingOutput);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         destFile.createSync(recursive: true, exclusive: true);
         destFile.writeAsBytesSync(decodedBytes);
@@ -655,6 +668,7 @@ class BackgroundArchiveService {
       } else if (lowerPath.endsWith('.bz2')) {
         final decodedBytes = BZip2Decoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
+        reportStage(DiagnosticArchivePhase.writingOutput);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         destFile.createSync(recursive: true, exclusive: true);
         destFile.writeAsBytesSync(decodedBytes);
@@ -663,6 +677,7 @@ class BackgroundArchiveService {
       } else if (lowerPath.endsWith('.lz4')) {
         final decodedBytes = lz4FrameDecode(bytes);
         final name = p.basenameWithoutExtension(archivePath);
+        reportStage(DiagnosticArchivePhase.writingOutput);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         destFile.createSync(recursive: true, exclusive: true);
         destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
@@ -671,6 +686,7 @@ class BackgroundArchiveService {
       } else if (lowerPath.endsWith('.zst') || lowerPath.endsWith('.zstd')) {
         final decodedBytes = const ZstdDecoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
+        reportStage(DiagnosticArchivePhase.writingOutput);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         destFile.createSync(recursive: true, exclusive: true);
         destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
@@ -682,7 +698,9 @@ class BackgroundArchiveService {
         final inputStream = InputFileStream(archivePath);
         try {
           final zipArchive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
-          validateArchiveExtractionPlan(destinationDir, zipArchive.files);
+          reportStage(DiagnosticArchivePhase.validatePaths);
+        validateArchiveExtractionPlan(destinationDir, zipArchive.files);
+        reportStage(DiagnosticArchivePhase.writingOutput);
           final totalFiles = zipArchive.length;
           
           for (int i = 0; i < totalFiles; i++) {
@@ -718,7 +736,9 @@ class BackgroundArchiveService {
 
       sendPort.send({'status': 'progress', 'progress': 0.3, 'currentFile': 'Extracting files...'});
 
-      validateArchiveExtractionPlan(destinationDir, archive.files);
+      reportStage(DiagnosticArchivePhase.validatePaths);
+        validateArchiveExtractionPlan(destinationDir, archive.files);
+        reportStage(DiagnosticArchivePhase.writingOutput);
       final totalFiles = archive.length;
       for (int i = 0; i < totalFiles; i++) {
         final fileEntry = archive[i];
@@ -747,8 +767,16 @@ class BackgroundArchiveService {
       });
       await Future.delayed(const Duration(milliseconds: 300));
       sendPort.send({'status': 'completed'});
-    } catch (e) {
-      sendPort.send({'status': 'error', 'error': e.toString()});
+    } catch (e, trace) {
+      // Keep raw exception text only in the existing on-device UI channel.
+      // Diagnostic fields cross the isolate boundary already sanitized.
+      sendPort.send({
+        'status': 'error',
+        'error': e.toString(),
+        'diagnosticCode': DiagnosticLogger.archiveFailureCode(e).name,
+        'diagnosticType': e.runtimeType.toString(),
+        'diagnosticFrames': DiagnosticLogger.safeApplicationFrames(trace),
+      });
     }
   }
 }
