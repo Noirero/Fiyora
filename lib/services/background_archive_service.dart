@@ -515,7 +515,13 @@ class BackgroundArchiveService {
 
       final file = File(archivePath);
       if (!file.existsSync()) {
-        sendPort.send({'status': 'error', 'error': 'Archive file not found'});
+        sendPort.send({
+          'status': 'error',
+          'error': 'Archive file not found',
+          'diagnosticCode': DiagnosticArchiveFailure.sourceMissing.name,
+          'diagnosticType': 'MissingSource',
+          'diagnosticFrames': '',
+        });
         return;
       }
       final lowerPath = archivePath.toLowerCase();
