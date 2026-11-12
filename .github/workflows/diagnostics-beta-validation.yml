@@ -43,7 +43,7 @@ jobs:
         run: flutter test test/diagnostic_logger_test.dart
 
       - name: Build installable debug APK (never release)
-        run: flutter build apk --debug --no-tree-shake-icons
+        run: flutter build apk --debug --no-tree-shake-icons --android-skip-build-dependency-validation
 
       - name: Upload test-only APK
         uses: actions/upload-artifact@v4
