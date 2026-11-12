@@ -1880,7 +1880,9 @@ class FileManagerProvider extends ChangeNotifier {
           }
         }
       }
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileDelete, success: true);
     } catch (e) {
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileDelete, success: false, failure: e);
       debugPrint('Error deleting selected files: $e');
     }
 
@@ -2562,7 +2564,9 @@ class FileManagerProvider extends ChangeNotifier {
         }
       }
       await loadDirectory(currentPath, showLoading: false, clearCache: true);
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileDelete, success: true);
     } catch (e) {
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileDelete, success: false, failure: e);
       debugPrint('Error deleting file: $e');
     }
   }
@@ -2582,7 +2586,9 @@ class FileManagerProvider extends ChangeNotifier {
         }
       }
       await loadDirectory(currentPath, showLoading: false, clearCache: true);
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileRename, success: true);
     } catch (e) {
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileRename, success: false, failure: e);
       debugPrint('Error renaming file: $e');
     }
   }
@@ -2603,8 +2609,10 @@ class FileManagerProvider extends ChangeNotifier {
         await Directory(newPath).create();
       }
       await loadDirectory(currentPath, showLoading: false, clearCache: true);
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.folderCreate, success: true);
       return finalName;
     } catch (e) {
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.folderCreate, success: false, failure: e);
       debugPrint('Error creating folder: $e');
       return null;
     }
@@ -2626,8 +2634,10 @@ class FileManagerProvider extends ChangeNotifier {
         await File(newPath).create();
       }
       await loadDirectory(currentPath, showLoading: false, clearCache: true);
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileCreate, success: true);
       return finalName;
     } catch (e) {
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileCreate, success: false, failure: e);
       debugPrint('Error creating file: $e');
       return null;
     }
@@ -3082,7 +3092,9 @@ class FileManagerProvider extends ChangeNotifier {
           SnackBar(content: Text('Moved $name successfully')),
         );
       }
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileMove, success: true);
     } catch (e) {
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileMove, success: false, failure: e);
       debugPrint('Error moving item: $e');
       if (showToast) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -3154,7 +3166,9 @@ class FileManagerProvider extends ChangeNotifier {
           SnackBar(content: Text('Copied $name successfully')),
         );
       }
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileCopy, success: true);
     } catch (e) {
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileCopy, success: false, failure: e);
       debugPrint('Error copying item: $e');
       if (showToast) {
         ScaffoldMessenger.of(context).showSnackBar(
