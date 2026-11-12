@@ -710,7 +710,7 @@ class MainActivity : AudioServiceFragmentActivity() {
         notificationsChannel?.setMethodCallHandler { call, result ->
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val channelId = "nfile_archive_channel"
-            val channelName = "NFile Archive Operations"
+            val channelName = "Fiyora Archive Operations"
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val channel = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_LOW).apply {

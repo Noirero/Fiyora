@@ -48,7 +48,7 @@ class WebSharingForegroundService : Service() {
             Notification.Builder(this)
         }
 
-        val title = if (isInternet) "NFile Internet Web Share" else "NFile Local Web Share"
+        val title = if (isInternet) "Fiyora Internet Web Share" else "Fiyora Local Web Share"
 
         val notification = builder
             .setContentTitle(title)
