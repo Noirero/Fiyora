@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   diagnostics-beta:
-    name: Test and Build Debug APK (No Release)
+    name: Test and Build ARM64 Debug APK (No Release)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -42,13 +42,26 @@ jobs:
       - name: Run targeted diagnostic tests
         run: flutter test test/diagnostic_logger_test.dart
 
-      - name: Build installable debug APK (never release)
-        run: flutter build apk --debug --no-tree-shake-icons
+      - name: Build arm64-v8a only debug APK (never release)
+        run: flutter build apk --debug --split-per-abi --target-platform android-arm64 --no-tree-shake-icons
 
-      - name: Upload test-only APK
+      - name: Verify APK contains ARM64 native libraries only
+        shell: bash
+        run: |
+          APK=build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk
+          test -s "$APK"
+          unzip -Z1 "$APK" | grep -q '^lib/arm64-v8a/'
+          if unzip -Z1 "$APK" | grep -Eq '^lib/(armeabi-v7a|x86_64|x86|arm64-v8a-unknown)/'; then
+            echo "Unexpected non-ARM64 native libraries in $APK"
+            exit 1
+          fi
+          du -h "$APK"
+          sha256sum "$APK"
+
+      - name: Upload arm64-v8a test-only APK
         uses: actions/upload-artifact@v4
         with:
-          name: FIYORA-diagnostic-logger-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          name: FIYORA-diagnostic-logger-arm64-v8a-debug-apk
+          path: build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk
           retention-days: 7
           if-no-files-found: error
