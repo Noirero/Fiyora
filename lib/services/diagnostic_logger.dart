@@ -326,8 +326,12 @@ class DiagnosticLogger {
     final duration = elapsedMs == null
         ? '' : ' duration_ms=${elapsedMs.clamp(0, 86400000)}';
     final code = failure == null ? '' : ' failure=${failure.name}';
-    final type = exceptionType == null ? '' :
-        ' exception_type=${_safeCode(exceptionType)}';
+    // A runtime type is an identifier, never a free-form exception message.
+    final knownType = exceptionType != null &&
+            RegExp(r'^[a-zA-Z_][a-zA-Z0-9_]{0,47}$').hasMatch(exceptionType)
+        ? exceptionType
+        : 'unavailable';
+    final type = exceptionType == null ? '' : ' exception_type=$knownType';
     final safeFrames = <String>[];
     final framePattern = RegExp(r'^[a-zA-Z0-9_.$<> ]+@package:nfile/[a-zA-Z0-9_./:-]+$');
     for (final frame in applicationFrames?.split('|') ?? const <String>[]) {
