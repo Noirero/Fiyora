@@ -73,6 +73,19 @@ void main() {
     expect(logger.preview(crash: false), contains('older entries truncated'));
   });
 
+  test('operation outcomes expose types, never error messages or paths', () {
+    final logger = DiagnosticLogger.forTesting(temp);
+    expect(logger.startManual(), isTrue);
+    logger.recordOutcome(DiagnosticEvent.fileMove,
+        success: false,
+        failure: FileSystemException('token=private', '/storage/private/secret.zip'));
+    logger.stopManual();
+    final report = logger.preview(crash: false);
+    expect(report, contains('outcome_fileMove_failure_FileSystemException'));
+    expect(report, isNot(contains('token=private')));
+    expect(report, isNot(contains('secret.zip')));
+  });
+
   test('unknown error sources and external frames are not persisted', () {
     final logger = DiagnosticLogger.forTesting(temp);
     logger.captureException(
