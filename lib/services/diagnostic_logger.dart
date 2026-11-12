@@ -29,31 +29,15 @@ enum DiagnosticEvent {
 
 
 enum DiagnosticArchivePhase {
-  requested,
-  unsupported,
-  dialogCanceled,
-  configured,
-  workerStarted,
-  sourceCheck,
-  decoding,
-  validatePaths,
-  writingOutput,
-  completed,
-  failed,
-  canceled,
+  requested, unsupported, dialogCanceled, configured, workerStarted,
+  sourceCheck, decoding, validatePaths, writingOutput,
+  completed, failed, canceled,
 }
 
 enum DiagnosticArchiveFailure {
-  sourceMissing,
-  destinationConflict,
-  permissionDenied,
-  storageFull,
-  unsafeArchive,
-  unsupportedFormat,
-  passwordOrEncryption,
-  invalidArchive,
-  filesystemError,
-  unknown,
+  sourceMissing, destinationConflict, permissionDenied, storageFull,
+  unsafeArchive, unsupportedFormat, passwordOrEncryption,
+  invalidArchive, filesystemError, unknown,
 }
 
 /// A small, local-only recorder. Crash breadcrumbs are independent of manual logs.
@@ -242,76 +226,64 @@ class DiagnosticLogger {
   }
 
 
-  int _nextOperationCounter = 0;
+  int _archiveSequence = 0;
 
-  /// Only internally generated numeric operation identifiers are accepted.
   String nextArchiveOperationId() {
-    _nextOperationCounter++;
-    return 'extract_${DateTime.now().microsecondsSinceEpoch}_$_nextOperationCounter';
+    _archiveSequence++;
+    return 'extract_${DateTime.now().microsecondsSinceEpoch}_$_archiveSequence';
   }
 
-  /// Format is a closed vocabulary; never write the input path.
+  /// Path classification is closed-vocabulary. No filename or directory
+  /// appears in diagnostic output.
   static String archiveFormatCode(String path) {
-    final name = path.toLowerCase();
-    if (name.endsWith('.zip.001')) return 'split_zip';
-    if (name.endsWith('.zip')) return 'zip';
-    if (name.endsWith('.tar.gz') || name.endsWith('.tgz')) return 'tar_gz';
-    if (name.endsWith('.tar.bz2') || name.endsWith('.tbz2')) return 'tar_bz2';
-    if (name.endsWith('.tar.lz4') || name.endsWith('.tlz4')) return 'tar_lz4';
-    if (name.endsWith('.tar.zst') || name.endsWith('.tzst')) return 'tar_zst';
-    if (name.endsWith('.tar')) return 'tar';
-    if (name.endsWith('.gz')) return 'gz';
-    if (name.endsWith('.bz2')) return 'bz2';
-    if (name.endsWith('.lz4')) return 'lz4';
-    if (name.endsWith('.zst') || name.endsWith('.zstd')) return 'zst';
+    final p = path.toLowerCase();
+    if (p.endsWith('.zip.001')) return 'split_zip';
+    if (p.endsWith('.zip')) return 'zip';
+    if (p.endsWith('.tar.gz') || p.endsWith('.tgz')) return 'tar_gz';
+    if (p.endsWith('.tar.bz2') || p.endsWith('.tbz2')) return 'tar_bz2';
+    if (p.endsWith('.tar.lz4') || p.endsWith('.tlz4')) return 'tar_lz4';
+    if (p.endsWith('.tar.zst') || p.endsWith('.tzst')) return 'tar_zst';
+    if (p.endsWith('.tar')) return 'tar';
+    if (p.endsWith('.gz')) return 'gz';
+    if (p.endsWith('.bz2')) return 'bz2';
+    if (p.endsWith('.lz4')) return 'lz4';
+    if (p.endsWith('.zst') || p.endsWith('.zstd')) return 'zst';
     return 'unknown';
   }
 
-  /// Error messages may contain paths, passwords or filenames. Inspect them
-  /// in-memory for a coarse category, but NEVER persist them.
+  /// Inspect text only in memory to derive a coarse category. Never write the
+  /// exception message, which may contain a path, filename or secret.
   static DiagnosticArchiveFailure archiveFailureCode(Object error) {
     if (error is FileSystemException) {
       switch (error.osError?.errorCode) {
-        case 2:
-          return DiagnosticArchiveFailure.sourceMissing;
-        case 13:
-          return DiagnosticArchiveFailure.permissionDenied;
-        case 17:
-          return DiagnosticArchiveFailure.destinationConflict;
-        case 28:
-          return DiagnosticArchiveFailure.storageFull;
+        case 2: return DiagnosticArchiveFailure.sourceMissing;
+        case 13: return DiagnosticArchiveFailure.permissionDenied;
+        case 17: return DiagnosticArchiveFailure.destinationConflict;
+        case 28: return DiagnosticArchiveFailure.storageFull;
       }
     }
-    final description = error.toString().toLowerCase();
-    if (description.contains('already exists') ||
-        description.contains('file exists') ||
-        description.contains('destination conflict')) {
+    final text = error.toString().toLowerCase();
+    if (text.contains('already exists') || text.contains('file exists') ||
+        text.contains('destination conflict')) {
       return DiagnosticArchiveFailure.destinationConflict;
     }
-    if (description.contains('unsafe') ||
-        description.contains('traversal') ||
-        description.contains('zip slip') ||
-        description.contains('symlink')) {
+    if (text.contains('unsafe') || text.contains('traversal') ||
+        text.contains('zip slip') || text.contains('symlink')) {
       return DiagnosticArchiveFailure.unsafeArchive;
     }
-    if (description.contains('password') ||
-        description.contains('decrypt') ||
-        description.contains('encrypted')) {
+    if (text.contains('password') || text.contains('decrypt') ||
+        text.contains('encrypted')) {
       return DiagnosticArchiveFailure.passwordOrEncryption;
     }
-    if (description.contains('not found') ||
-        description.contains('no such file')) {
+    if (text.contains('not found') || text.contains('no such file')) {
       return DiagnosticArchiveFailure.sourceMissing;
     }
-    if (description.contains('unsupported') ||
-        description.contains('not supported')) {
+    if (text.contains('unsupported') || text.contains('not supported')) {
       return DiagnosticArchiveFailure.unsupportedFormat;
     }
-    if (description.contains('corrupt') ||
-        description.contains('invalid archive') ||
-        description.contains('checksum') ||
-        description.contains('invalid signature') ||
-        description.contains('crc')) {
+    if (text.contains('corrupt') || text.contains('invalid archive') ||
+        text.contains('checksum') || text.contains('invalid signature') ||
+        text.contains('crc')) {
       return DiagnosticArchiveFailure.invalidArchive;
     }
     return error is FileSystemException
@@ -319,14 +291,14 @@ class DiagnosticLogger {
         : DiagnosticArchiveFailure.unknown;
   }
 
-  /// Only application frames are retained. External file:/// and file names
-  /// are excluded; source positions are kept for matching the exact commit.
+  /// Keep source coordinates in package:nfile only; discard all external,
+  /// absolute, URI and user-dependent frame paths.
   static String safeApplicationFrames(StackTrace? trace) {
     if (trace == null) return '';
-    final result = <String>[];
     final frame = RegExp(r'^#\d+\s+(.+?)\s+\((package:nfile/[a-zA-Z0-9_./:-]+)\)');
-    for (final entry in trace.toString().split('\n')) {
-      final match = frame.firstMatch(entry.trim());
+    final result = <String>[];
+    for (final line in trace.toString().split('\n')) {
+      final match = frame.firstMatch(line.trim());
       if (match == null) continue;
       final method = match.group(1)!.replaceAll(RegExp(r'[^a-zA-Z0-9_.$<> ]'), '');
       result.add('$method@${match.group(2)}');
@@ -335,8 +307,6 @@ class DiagnosticLogger {
     return result.join('|');
   }
 
-  /// A diagnostic phase is not a success claim. Only the completion callback
-  /// may record 'completed'. This method writes no user-generated strings.
   void recordArchivePhase({
     required String operationId,
     required DiagnosticArchivePhase phase,
@@ -346,264 +316,42 @@ class DiagnosticLogger {
     String? exceptionType,
     String? applicationFrames,
   }) {
-    final safeId = RegExp(r'^extract_[0-9]{10,20}_[0-9]{1,6}
-  /// message and external paths are deliberately excluded for privacy.
-  void captureException(String source, Object error, StackTrace? trace) {
-    if (_dir == null) return;
-    try {
-      const allowedSources = {'flutter_framework', 'platform_dispatcher'};
-      final origin = allowedSources.contains(source) ? source : 'unknown';
-      final type = _safeCode(error.runtimeType.toString());
-      final safeFrames = <String>[];
-      if (trace != null) {
-        final frame = RegExp(r'^#\d+\s+(.+?)\s+\((package:nfile/[a-zA-Z0-9_./:-]+)\)');
-        for (final line in trace.toString().split('\n')) {
-          final m = frame.firstMatch(line.trim());
-          if (m == null) continue;
-          final method = m.group(1)!.replaceAll(RegExp(r'[^a-zA-Z0-9_.$<> ]'), '');
-          safeFrames.add('$method @ ${m.group(2)}');
-          if (safeFrames.length >= 12) break;
-        }
-      }
-      // Manual sessions must also reveal unhandled errors, even though the
-      // detailed recovered report is stored separately.
-      _recordSafeCode(
-        'unhandled_error source=$origin exception_type=$type '
-        'app_frames=${safeApplicationFrames(trace)}',
-      );
-      _writeCrashReport(
-        'Classification: unhandled_exception (process crash NOT confirmed)\n'
-        'Captured: ${DateTime.now().toUtc().toIso8601String()} UTC\n'
-        'Source: $origin\n'
-        'Exception type: $type\n'
-        'Stack: ${safeFrames.isEmpty ? "unavailable" : safeFrames.join(" | ")}\n',
-      );
-    } catch (_) {
-      _writeFailed = true;
-    }
-  }
-
-  void _writeCrashReport(String content) {
-    if (_dir == null) return;
-    try {
-      String recent = '';
-      if (_exists('breadcrumbs.txt')) {
-        recent = _file('breadcrumbs.txt').readAsStringSync();
-      }
-      final maxHead = content.length > 16 * 1024 ? content.substring(0, 16 * 1024) : content;
-      _file('crash_report.txt').writeAsStringSync(
-        'FIYORA CRASH / TERMINATION DIAGNOSTICS\n'
-        '$maxHead\nRecent breadcrumbs (bounded):\n$recent',
-        flush: true,
-      );
-    } catch (_) {
-      _writeFailed = true;
-    }
-  }
-
-  void clearCrashReport() {
-    try {
-      if (_exists('crash_report.txt')) _file('crash_report.txt').deleteSync();
-    } catch (_) {
-      _writeFailed = true;
-    }
-  }
-
-  String preview({required bool crash, int maxCharacters = 4500}) {
-    final name = crash ? 'crash_report.txt' : 'manual_session.txt';
-    try {
-      if (!_exists(name)) return 'No report available.';
-      final s = _file(name).readAsStringSync();
-      return s.length > maxCharacters ? '... earlier entries omitted ...\n' + s.substring(s.length - maxCharacters) : s;
-    } catch (_) {
-      return 'Unable to read diagnostics.';
-    }
-  }
-
-  /// Explicit, user-initiated export. Reports stay in app-private storage until
-  /// requested, then are copied to visible Downloads for the user's file manager.
-  Future<File> exportToDownloads({required bool crash}) async {
-    if (_dir == null) throw StateError('Diagnostics storage unavailable');
-    final source = _file(crash ? 'crash_report.txt' : 'manual_session.txt');
-    if (!await source.exists()) throw StateError('No report exists');
-    if (!Platform.isAndroid) throw UnsupportedError('Downloads export requires Android');
-    final destination = Directory('/storage/emulated/0/Download/FIYORA/Diagnostics');
-    await destination.create(recursive: true);
-    final name = crash ? 'crash' : 'manual';
-    final stamp = DateTime.now().toUtc().millisecondsSinceEpoch;
-    return source.copy(destination.path + '/FIYORA_' + name + '_' + stamp.toString() + '.txt');
-  }
-
-  void _appendBounded(File target, String entry, int limit) {
-    final size = utf8.encode(entry).length;
-    if (size > limit) return;
-    final previous = target.existsSync() ? target.lengthSync() : 0;
-    if (previous + size > limit) {
-      final lines = target.existsSync() ? target.readAsLinesSync() : <String>[];
-      final retained = <String>[];
-      var used = 0;
-      for (final line in lines.reversed) {
-        final bytes = utf8.encode(line).length + 1;
-        if (used + bytes > limit ~/ 2) break;
-        retained.insert(0, line);
-        used += bytes;
-      }
-      // Write the replacement separately, then swap it into place. A crash
-      // during trimming must not leave the previous breadcrumb file empty.
-      final replacement = File(target.path + '.rotating');
-      replacement.writeAsStringSync(
-        '... older entries truncated (bounded log) ...\n'
-        + (retained.isEmpty ? '' : retained.join('\n') + '\n'),
-        flush: true,
-      );
-      replacement.renameSync(target.path);
-    }
-    // A completed kernel write survives an app process crash; avoid fsync on
-    // every UI event to reduce main-isolate stalls. Fatal reports use flush.
-    target.writeAsStringSync(entry, mode: FileMode.append);
-  }
-}
-).hasMatch(operationId)
-        ? operationId
-        : 'invalid';
-    const allowedFormats = {
+    final id = RegExp(r'^extract_[0-9]{10,20}_[0-9]{1,6}$').hasMatch(operationId)
+        ? operationId : 'invalid';
+    const validFormats = {
       'split_zip', 'zip', 'tar_gz', 'tar_bz2', 'tar_lz4',
       'tar_zst', 'tar', 'gz', 'bz2', 'lz4', 'zst', 'unknown',
     };
-    final safeFormat = allowedFormats.contains(format) ? format : 'unknown';
+    final knownFormat = validFormats.contains(format) ? format : 'unknown';
     final duration = elapsedMs == null
-        ? ''
-        : ' duration_ms=${elapsedMs.clamp(0, 86400000)}';
-    final errorCode = failure == null ? '' : ' failure=${failure.name}';
-    final type = exceptionType == null
-        ? ''
-        : ' exception_type=${_safeCode(exceptionType)}';
-    final verifiedFrames = <String>[];
-    final frameRule = RegExp(
-      r'^[a-zA-Z0-9_.$<> ]+@package:nfile/[a-zA-Z0-9_./:-]+
-  /// message and external paths are deliberately excluded for privacy.
-  void captureException(String source, Object error, StackTrace? trace) {
-    if (_dir == null) return;
-    try {
-      const allowedSources = {'flutter_framework', 'platform_dispatcher'};
-      final origin = allowedSources.contains(source) ? source : 'unknown';
-      final type = _safeCode(error.runtimeType.toString());
-      final safeFrames = <String>[];
-      if (trace != null) {
-        final frame = RegExp(r'^#\d+\s+(.+?)\s+\((package:nfile/[a-zA-Z0-9_./:-]+)\)');
-        for (final line in trace.toString().split('\n')) {
-          final m = frame.firstMatch(line.trim());
-          if (m == null) continue;
-          final method = m.group(1)!.replaceAll(RegExp(r'[^a-zA-Z0-9_.$<> ]'), '');
-          safeFrames.add('$method @ ${m.group(2)}');
-          if (safeFrames.length >= 12) break;
-        }
-      }
-      _writeCrashReport(
-        'Classification: unhandled_exception (process crash NOT confirmed)\n'
-        'Captured: ${DateTime.now().toUtc().toIso8601String()} UTC\n'
-        'Source: $origin\n'
-        'Exception type: $type\n'
-        'Stack: ${safeFrames.isEmpty ? "unavailable" : safeFrames.join(" | ")}\n',
-      );
-    } catch (_) {
-      _writeFailed = true;
-    }
-  }
-
-  void _writeCrashReport(String content) {
-    if (_dir == null) return;
-    try {
-      String recent = '';
-      if (_exists('breadcrumbs.txt')) {
-        recent = _file('breadcrumbs.txt').readAsStringSync();
-      }
-      final maxHead = content.length > 16 * 1024 ? content.substring(0, 16 * 1024) : content;
-      _file('crash_report.txt').writeAsStringSync(
-        'FIYORA CRASH / TERMINATION DIAGNOSTICS\n'
-        '$maxHead\nRecent breadcrumbs (bounded):\n$recent',
-        flush: true,
-      );
-    } catch (_) {
-      _writeFailed = true;
-    }
-  }
-
-  void clearCrashReport() {
-    try {
-      if (_exists('crash_report.txt')) _file('crash_report.txt').deleteSync();
-    } catch (_) {
-      _writeFailed = true;
-    }
-  }
-
-  String preview({required bool crash, int maxCharacters = 4500}) {
-    final name = crash ? 'crash_report.txt' : 'manual_session.txt';
-    try {
-      if (!_exists(name)) return 'No report available.';
-      final s = _file(name).readAsStringSync();
-      return s.length > maxCharacters ? '... earlier entries omitted ...\n' + s.substring(s.length - maxCharacters) : s;
-    } catch (_) {
-      return 'Unable to read diagnostics.';
-    }
-  }
-
-  /// Explicit, user-initiated export. Reports stay in app-private storage until
-  /// requested, then are copied to visible Downloads for the user's file manager.
-  Future<File> exportToDownloads({required bool crash}) async {
-    if (_dir == null) throw StateError('Diagnostics storage unavailable');
-    final source = _file(crash ? 'crash_report.txt' : 'manual_session.txt');
-    if (!await source.exists()) throw StateError('No report exists');
-    if (!Platform.isAndroid) throw UnsupportedError('Downloads export requires Android');
-    final destination = Directory('/storage/emulated/0/Download/FIYORA/Diagnostics');
-    await destination.create(recursive: true);
-    final name = crash ? 'crash' : 'manual';
-    final stamp = DateTime.now().toUtc().millisecondsSinceEpoch;
-    return source.copy(destination.path + '/FIYORA_' + name + '_' + stamp.toString() + '.txt');
-  }
-
-  void _appendBounded(File target, String entry, int limit) {
-    final size = utf8.encode(entry).length;
-    if (size > limit) return;
-    final previous = target.existsSync() ? target.lengthSync() : 0;
-    if (previous + size > limit) {
-      final lines = target.existsSync() ? target.readAsLinesSync() : <String>[];
-      final retained = <String>[];
-      var used = 0;
-      for (final line in lines.reversed) {
-        final bytes = utf8.encode(line).length + 1;
-        if (used + bytes > limit ~/ 2) break;
-        retained.insert(0, line);
-        used += bytes;
-      }
-      // Write the replacement separately, then swap it into place. A crash
-      // during trimming must not leave the previous breadcrumb file empty.
-      final replacement = File(target.path + '.rotating');
-      replacement.writeAsStringSync(
-        '... older entries truncated (bounded log) ...\n'
-        + (retained.isEmpty ? '' : retained.join('\n') + '\n'),
-        flush: true,
-      );
-      replacement.renameSync(target.path);
-    }
-    // A completed kernel write survives an app process crash; avoid fsync on
-    // every UI event to reduce main-isolate stalls. Fatal reports use flush.
-    target.writeAsStringSync(entry, mode: FileMode.append);
-  }
-}
-,
-    );
+        ? '' : ' duration_ms=${elapsedMs.clamp(0, 86400000)}';
+    final code = failure == null ? '' : ' failure=${failure.name}';
+    final type = exceptionType == null ? '' :
+        ' exception_type=${_safeCode(exceptionType)}';
+    final safeFrames = <String>[];
+    final framePattern = RegExp(r'^[a-zA-Z0-9_.$<> ]+@package:nfile/[a-zA-Z0-9_./:-]+$');
     for (final frame in applicationFrames?.split('|') ?? const <String>[]) {
-      if (frameRule.hasMatch(frame)) verifiedFrames.add(frame);
-      if (verifiedFrames.length >= 6) break;
+      if (framePattern.hasMatch(frame)) safeFrames.add(frame);
+      if (safeFrames.length >= 6) break;
     }
-    final frames = verifiedFrames.isEmpty
-        ? ''
-        : ' app_frames=${verifiedFrames.join('|')}';
+    final frames = safeFrames.isEmpty ? '' : ' app_frames=${safeFrames.join('|')}';
     _recordSafeCode(
-      'operation=archiveExtract op_id=$safeId '
-      'phase=${phase.name} format=$safeFormat'
-      '$duration$errorCode$type$frames',
+      'operation=archiveExtract op_id=$id phase=${phase.name} '
+      'format=$knownFormat$duration$code$type$frames',
+    );
+  }
+
+  /// Explicitly record handled failures; these never reach global error hooks.
+  void recordHandledError(
+    DiagnosticEvent operation,
+    Object error,
+    StackTrace trace,
+  ) {
+    final type = _safeCode(error.runtimeType.toString());
+    final code = archiveFailureCode(error);
+    _recordSafeCode(
+      'handled_error operation=${operation.name} exception_type=$type '
+      'failure=${code.name} app_frames=${safeApplicationFrames(trace)}',
     );
   }
 
@@ -626,6 +374,10 @@ class DiagnosticLogger {
           if (safeFrames.length >= 12) break;
         }
       }
+      _recordSafeCode(
+        'unhandled_error source=$origin exception_type=$type '
+        'app_frames=${safeApplicationFrames(trace)}',
+      );
       _writeCrashReport(
         'Classification: unhandled_exception (process crash NOT confirmed)\n'
         'Captured: ${DateTime.now().toUtc().toIso8601String()} UTC\n'
