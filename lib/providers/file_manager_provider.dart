@@ -23,6 +23,7 @@ import '../services/apk_installer_service.dart';
 import '../ui/widgets/extract_archive_dialog.dart';
 import '../core/utils.dart';
 import '../services/preferences_service.dart';
+import '../services/diagnostic_logger.dart';
 import '../services/app_manager_service.dart';
 import '../models/custom_shortcut_model.dart';
 import '../services/root_shizuku_service.dart';
@@ -926,6 +927,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> loadDirectoryForTab(int tabIndex, String path, {bool showLoading = true, bool clearCache = false}) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.directoryLoad);
     if (tabIndex >= 0 && tabIndex < _tabs.length) {
       final oldIndex = _activeTabIndex;
       _activeTabIndex = tabIndex;
@@ -1620,6 +1622,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> loadDirectory(String path, {bool showLoading = true, bool clearCache = false}) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.directoryLoad);
     deactivateSearchForTab(activeTab);
     // Normalize legacy sdcard paths to canonical /storage/emulated/0
     String resolvedPath = path.replaceAll(RegExp(r'/+'), '/');
@@ -1852,6 +1855,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> deleteSelected() async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.fileDelete);
     if (selectedPaths.isEmpty) return;
 
     activeTab.isLoading = true;
@@ -1886,6 +1890,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> pasteFile(BuildContext context, {bool clearAfterPaste = true}) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.pasteStarted);
     if (_clipboardPaths.isEmpty && !_isRemoteClipboard) return;
 
     if (_isRemoteClipboard) {
@@ -2540,6 +2545,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> deleteFile(String path) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.fileDelete);
     try {
       if (RecycleBinService.isEnabled()) {
         await RecycleBinService.moveToTrash(path, useRoot: useRootMode);
@@ -2562,6 +2568,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> renameFile(String oldPath, String newName) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.fileRename);
     try {
       if (isRestrictedPath(oldPath)) {
         await RootShizukuService.renameItem(oldPath, newName, useRoot: useRootMode);
@@ -2581,6 +2588,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<String?> createFolder(String name) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.folderCreate);
     try {
       String finalName = name;
       final targetPath = p.join(currentPath, name);
@@ -2603,6 +2611,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<String?> createFile(String name) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.fileCreate);
     try {
       String finalName = name;
       final targetPath = p.join(currentPath, name);
@@ -2676,6 +2685,7 @@ class FileManagerProvider extends ChangeNotifier {
     List<String>? targetPaths,
     BuildContext? context,
   }) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.archiveCreate);
     final paths = targetPaths ?? (selectedPaths.isNotEmpty ? selectedPaths.toList() : [currentPath]);
 
     // Check size limit for TAR.LZ4 and TAR.ZSTD
@@ -2762,6 +2772,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> extractArchiveDirectly(BuildContext context, String path) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.archiveExtract);
     final unsupported = ArchiveFormatSupport.unavailableExtractionReason(path);
     if (unsupported != null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2928,6 +2939,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> openFile(BuildContext context, String path, {bool showOpenWithPopup = false, bool forceOpenWith = false}) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.fileOpen);
     _highlightedPaths.clear();
     _highlightedPaths.add(path);
     notifyListeners();
@@ -3013,6 +3025,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> moveItem(BuildContext context, String sourcePath, String destFolderPath, {bool showToast = true}) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.fileMove);
     final name = p.basename(sourcePath);
     final destPath = p.join(destFolderPath, name);
 
@@ -3094,6 +3107,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> copyItem(BuildContext context, String sourcePath, String destFolderPath, {bool showToast = true}) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.fileCopy);
     final name = p.basename(sourcePath);
     final destPath = p.join(destFolderPath, name);
 
