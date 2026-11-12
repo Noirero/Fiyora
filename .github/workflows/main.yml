@@ -1,29 +1,19 @@
-name: main — Fiyora Stable (manual)
+name: Fiyora Stable (manual)
 
 # Manual, audited promotion. Never automatically publishes main on push.
 on:
   workflow_dispatch:
-    inputs:
-      tested_beta_tag:
-        description: 'Existing Fiyora beta prerelease tag that passed device testing'
-        required: true
-        type: string
-      device_test_approved:
-        description: 'I tested the specified Fiyora beta on a physical device'
-        required: true
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: fiyora-stable-candidate
+  group: fiyora-stable-publish
   cancel-in-progress: false
 
 jobs:
   candidate:
-    name: Verify promotion and prepare stable APK
+    name: Build and publish FIYORA Stable
     runs-on: ubuntu-latest
     timeout-minutes: 75
     permissions:
@@ -36,72 +26,35 @@ jobs:
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_REF" = refs/heads/main
-      - name: Confirm physical beta test attestation
-        shell: bash
-        env:
-          APPROVED: ${{ inputs.device_test_approved }}
-        run: |
-          test "$APPROVED" = true || { echo 'Beta device test has not been approved'; exit 1; }
-
-      - name: Checkout main with full ancestry
+      - name: Checkout exact dispatched main commit
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify beta build, promotion lineage and stable identity
+      - name: Verify stable identity and release source
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TESTED_BETA_TAG: ${{ inputs.tested_beta_tag }}
         run: |
           set -euo pipefail
-          # Avoid tag-name option injection, path manipulation or unrelated releases.
-          [[ "$TESTED_BETA_TAG" =~ ^fiyora-beta-v[0-9]+\.[0-9]+\.[0-9]+-r([0-9]+)-a([0-9]+)$ ]] || {
-            echo 'Unexpected beta tag syntax.'
-            exit 1
-          }
-          BETA_RUN_ID="${BASH_REMATCH[1]}"
-          BETA_RUN_ATTEMPT="${BASH_REMATCH[2]}"
-          MAIN_SHA="$(git rev-parse HEAD)"
-          test "$MAIN_SHA" = "$GITHUB_SHA" || { echo 'Dispatch SHA mismatch'; exit 1; }
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          test "$SOURCE_SHA" = "$GITHUB_SHA" || { echo 'Dispatch SHA mismatch'; exit 1; }
           CURRENT_MAIN="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
-          test "$MAIN_SHA" = "$CURRENT_MAIN" || { echo 'main moved after checkout'; exit 1; }
+          test "$SOURCE_SHA" = "$CURRENT_MAIN" || { echo 'main moved after dispatch'; exit 1; }
 
-          RELEASE="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TESTED_BETA_TAG}")"
-          echo "$RELEASE" | jq -e '.prerelease == true and .draft == false and (.assets | length) > 0' >/dev/null
-          git fetch --no-tags origin "refs/tags/${TESTED_BETA_TAG}:refs/tags/${TESTED_BETA_TAG}"
-          BETA_SHA="$(git rev-parse "${TESTED_BETA_TAG}^{commit}")"
-
-          # The manual beta workflow runs from main and checks out apk-beta.
-          # Confirm prerelease describes the tagged source and the originating manual run.
-          echo "$RELEASE" | jq -e --arg sha "$BETA_SHA" '
-            (.body | contains("Source commit: `" + $sha + "`"))' >/dev/null
-          CI_RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${BETA_RUN_ID}/attempts/${BETA_RUN_ATTEMPT}")"
-          echo "$CI_RUN" | jq -e '
-            .event == "workflow_dispatch" and
-            .head_branch == "main" and
-            .conclusion == "success" and
-            .path == ".github/workflows/beta.yml"' >/dev/null
-
-          git merge-base --is-ancestor "$BETA_SHA" "$MAIN_SHA" || {
-            echo 'Tested beta commit is not an ancestor of main. Promote with a merge commit (not squash), then retest/approve as appropriate.'
-            exit 1
-          }
-          # Fiyora stable keeps the original NFile package ID for upgrade compatibility.
+          # Do not publish an NFile-branded APK under the FIYORA Stable label.
           grep -Fq 'applicationId = "com.rubex.nfile"' android/app/build.gradle.kts
           grep -Fq 'android:label="Fiyora Explorer"' android/app/src/main/AndroidManifest.xml
           VERSION="$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' pubspec.yaml | head -n1)"
           test -n "$VERSION"
           TAG="v${VERSION}"
           if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
-            echo "Stable tag ${TAG} already exists. Refusing to overwrite a prior release."
+            echo "Stable tag ${TAG} already exists; refusing overwrite."
             exit 1
           fi
-          echo "SOURCE_SHA=$MAIN_SHA" >> "$GITHUB_ENV"
-          echo "BETA_SHA=$BETA_SHA" >> "$GITHUB_ENV"
-          echo "BETA_RUN_ID=$BETA_RUN_ID" >> "$GITHUB_ENV"
+          echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
           echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
 
@@ -112,6 +65,7 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.9'
           channel: stable
           cache: true
 
@@ -173,7 +127,7 @@ jobs:
           (cd dist && sha256sum ./*.apk > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
 
-      - name: Upload candidate APKs for final device acceptance
+      - name: Upload immutable stable APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: fiyora-stable-candidate-${{ github.run_id }}-${{ github.run_attempt }}
@@ -188,23 +142,30 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Create unpublished draft stable release
+      - name: Ensure main still matches the built source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CURRENT_MAIN="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          test "$CURRENT_MAIN" = "$SOURCE_SHA" || {
+            echo 'main changed during build; refusing to publish stale Stable APK.'
+            exit 1
+          }
+
+      - name: Publish public Fiyora Stable release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ env.SOURCE_SHA }}
-          name: Fiyora ${{ env.APP_VERSION }} (candidate)
+          name: Fiyora ${{ env.APP_VERSION }}
           prerelease: false
-          draft: true
-          make_latest: false
+          draft: false
+          make_latest: true
           body: |
-            **DRAFT ONLY — do not publish until the exact stable candidate APK has completed final device acceptance.**
-
-            Stable source on `main`: `${{ env.SOURCE_SHA }}`
-            Previously tested beta source: `${{ env.BETA_SHA }}`
-            Previously tested beta prerelease: `${{ inputs.tested_beta_tag }}`
-            Successful manually-triggered beta run: `${{ env.BETA_RUN_ID }}`
-            Beta physical test attested by manual workflow operator.
-            **Note:** Stable binaries differ from preview binaries (package ID and signing key). Verify the final signed candidate on a physical device before publication.
+            Public Fiyora Stable release built manually from exact main commit `${{ env.SOURCE_SHA }}`.
+            GitHub Actions run: `${{ github.run_id }}`, attempt `${{ github.run_attempt }}`.
+            APKs are signed and checked in CI. A successful build does not prove physical-device behavior.
           files: dist/*
           fail_on_unmatched_files: true

@@ -1,35 +1,35 @@
-# FIYORA — Tiga workflow rilis manual
+# FIYORA — Three manual APK workflows
 
-Seluruh workflow penerbitan berada di default branch `main` agar muncul di GitHub Actions. Ketiganya hanya memiliki pemicu `workflow_dispatch`, jadi push/commit tidak otomatis menghasilkan GitHub Release. Jalankan melalui **Actions → pilih workflow → Run workflow** dengan pilihan branch `main`. Workflow `build.yml` tetap melakukan pengujian otomatis pada PR/push dan **tidak menerbitkan APK**.
+| Actions workflow | Select branch | APK source | Result |
+|---|---|---|---|
+| `Fiyora Stable (manual)` | `main` | Exact dispatched `main` SHA | **Public GitHub Release**, not draft/prerelease |
+| `beta — Fiyora Beta (manual)` | `apk-beta` | Exact dispatched `apk-beta` SHA | **Actions artifact** containing signed ARM64 Beta APK + SHA256SUMS; **no GitHub Release** |
+| `apk-build — NFile Original (manual)` | `apk-build` | Frozen NFile source commit `00dcc955bbb0af0c0b0d963f644e6980d1ed67e5` | **Actions artifact** containing signed original ABI-split APKs + SHA256SUMS; **no GitHub Release** |
 
-| Workflow di Actions | Source yang dibuild | Hasil |
-|---|---|---|
-| `main` (`.github/workflows/main.yml`) | `main` saat dispatch | Fiyora stable **draft**, perlu test kandidat dan publish manual |
-| `beta` (`.github/workflows/beta.yml`) | `apk-beta` terkini | Fiyora preview ARM64, **prerelease manual** |
-| `apk-build` (`.github/workflows/apk-build.yml`) | snapshot NFile original `00dcc955bbb0af0c0b0d963f644e6980d1ed67e5` | NFile original ABI-split, **prerelease manual** |
+## How to run
 
-## Menghilangkan auto-build beta lama
+Open GitHub **Actions**, select the workflow, click **Run workflow**, choose the branch from the table, and run it.
+All three APK workflows use only `workflow_dispatch`; push/commit alone cannot publish a GitHub release. The separate `Fiyora PR Build Check` workflow validates changes targeting `main` but cannot publish.
 
-Branch `apk-beta` masih memiliki workflow `.github/workflows/apk-build.yml` yang berjalan otomatis pada push. Workflow lama ini perlu dihapus **hanya dari `apk-beta`** melalui PR cleanup terpisah. Workflow bernama sama pada `main` adalah *workflow original baru*, bukan workflow lama. **Branch `apk-build` tidak diubah.**
+- **Stable**: Runs Flutter tests, checks production package and branding, signs three ABI-split APKs, verifies signatures/checksums and checks that the `main` source has not moved. After success, it publishes **directly** as a public, non-prerelease GitHub Release under a unique `v<version>` tag. Running this workflow is the explicit publication action; there is no extra draft/publish step.
+- **Beta**: Builds the exact selected `apk-beta` commit with preview signing. Download the output ZIP under **Actions → completed workflow run → Artifacts**. The ZIP contains the APK and `SHA256SUMS.txt`. No prerelease is created.
+- **Original**: Runs on the selected `apk-build` branch but checks out the **frozen original NFile source commit** for compilation. Download the ZIP under **Actions → completed workflow run → Artifacts**; it contains APKs for ARM64, ARMv7 and x86_64 plus checksums. No prerelease is created.
 
-## Signing
+## Branch setup and prerequisites
 
-- Beta: `MRARE_KEYSTORE_BASE64`, `MRARE_KEY_ALIAS`, `MRARE_KEY_PASSWORD`, `MRARE_STORE_PASSWORD` (nama legacy dipertahankan).
-- Stable & original: `KEYSTORE_BASE64`, `KEY_ALIAS`, `KEY_PASSWORD`, `STORE_PASSWORD`.
-- Semua job gagal jika secret signing tidak ada, dan memverifikasi identitas APK serta checksum. Keystore tidak masuk ke Git.
+- GitHub needs `.github/workflows/beta.yml` on both `main` and `apk-beta` to make `apk-beta` a genuine dispatchable option. PR **#13** adds the Beta branch file; PR **#14** updates the default branch file.
+- Likewise, `.github/workflows/apk-build.yml` must exist on both `main` and `apk-build`. PR **#15** adds the workflow-only file to `apk-build`; PR **#14** updates the default branch version. **The application source of NFile Original is not changed**; the build checks out the frozen original commit.
+- Current `main` still uses the NFile launcher label. The Stable workflow intentionally **fails** until the actual FIYORA branding/source is correctly promoted to `main`. Do not label an unbranded NFile APK as FIYORA Stable.
+- Stable and Original preserve the `com.rubex.nfile` Android application ID; only one can be installed under that ID. Ensure release signing is compatible with upgrade history. Beta uses `com.noirero.fiyora.preview` and can coexist with it.
 
-## Proses rilis
+## Signing and download
 
-1. Edit dan commit pada `apk-beta`. Jalankan `beta` manual pada `main`: workflow checkout HEAD `apk-beta`, verifikasi package `com.noirero.fiyora.preview`, build, signing, checksum, lalu membuat GitHub prerelease bertag unik. Uji APK tersebut di perangkat.
-2. Setelah uji beta disetujui, review perubahan dan promosikan source beta teruji menuju `main`. Pastikan identitas produksi dan branding sesuai sebelum merge; jangan memindahkan `applicationId` beta ke stable tanpa review.
-3. Jalankan `main` manual, masukkan **tag prerelease beta yang diuji**, lalu centang **device_test_approved**. CI memverifikasi tag, keberhasilan workflow beta manual, riwayat commit beta ke main, identitas stable, dan tidak adanya tag stable duplikat.
-4. Workflow menghasilkan APK stable bertanda tangan, checksum, serta GitHub Release **draft**. Uji **APK stable candidate persis itu** di perangkat dan **publish draft secara manual** setelah lolos.
-5. Untuk APK original, jalankan `apk-build` manual dari `main`. Workflow mengecek `apk-build` belum berubah dari commit frozen, lalu checkout langsung commit asli. Tidak menyentuh source NFile.
+- **Beta** secrets: `MRARE_KEYSTORE_BASE64`, `MRARE_KEY_ALIAS`, `MRARE_KEY_PASSWORD`, `MRARE_STORE_PASSWORD`.
+- **Stable / Original** secrets: `KEYSTORE_BASE64`, `KEY_ALIAS`, `KEY_PASSWORD`, `STORE_PASSWORD`.
+- The workflows fail if mandatory signing secrets are unavailable. APK package/signing checks and SHA-256 checksums remain in place. No keystore is committed.
+- GitHub Actions artifacts are retained for a limited period and downloads can require GitHub login. They are **not** GitHub Releases.
+- CI success does not establish physical-device acceptance. Because Stable is now **direct public publication**, the owner should verify release readiness **before** selecting Run workflow. No automatic merge, workflow dispatch or publication is implied by preparing the PRs.
 
-## Batasan yang perlu disadari
+## Change coordination
 
-- Sekarang `main` masih berlabel NFile; PR rebranding #1 belum di-merge. Workflow stable sengaja menolak hingga `main` beridentitas Fiyora yang sah.
-- Stable (`com.rubex.nfile`) dan NFile original (`com.rubex.nfile`) memakai package ID sama untuk menjaga kompatibilitas upgrade yang sudah ada; keduanya **tidak dapat hidup berdampingan** sebagai dua aplikasi. Beta (`com.noirero.fiyora.preview`) bisa dipasang berdampingan.
-- Membiarkan original source tidak diubah **tidak menjamin APK hasil build byte-identical**, karena dependency, toolchain, signing, dan timestamp dapat berbeda.
-- PR workflow #2 dan PR rebranding #1 sama-sama mengedit `build.yml`. Selesaikan konflik itu sebelum merge; masing-masing CI hijau bukan bukti integrasi keduanya.
-- Jangan auto-merge, auto-publish draft stable atau mengubah branch original tanpa persetujuan pemilik.
+PRs **#13, #14 and #15** are companion manual-workflow changes. Review the exact final diffs and validation together; keep them draft until the owner authorizes integration. PR #12 (archive rollback safety) is unrelated and must not be merged as part of the workflow migration.
