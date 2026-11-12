@@ -1,6 +1,6 @@
 name: apk-build — NFile Original (manual)
 
-# Only the workflow lives on main. The source is an immutable, audited NFile snapshot.
+# Dispatch on apk-build; compile the immutable, audited original NFile source commit.
 on:
   workflow_dispatch:
 
@@ -17,28 +17,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      contents: write
+      contents: read
     env:
       ORIGINAL_SHA: 00dcc955bbb0af0c0b0d963f644e6980d1ed67e5
     steps:
-      - name: Enforce manual dispatch from main
+      - name: Enforce manual dispatch from apk-build
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
-          test "$GITHUB_REF" = refs/heads/main
-      - name: Confirm original branch has not moved
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          CURRENT="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/apk-build" --jq .object.sha)"
-          test "$CURRENT" = "$ORIGINAL_SHA" || {
-            echo "apk-build moved from original source $ORIGINAL_SHA to $CURRENT. Review explicitly before updating the immutable baseline."
-            exit 1
-          }
-
+          test "$GITHUB_REF" = refs/heads/apk-build
       - name: Checkout frozen NFile source (not Fiyora)
         uses: actions/checkout@v4
         with:
@@ -55,7 +43,6 @@ jobs:
           VERSION="$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' pubspec.yaml | head -n1)"
           test -n "$VERSION"
           echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "RELEASE_TAG=nfile-original-v${VERSION}-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v4
         with:
@@ -128,18 +115,3 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-      - name: Publish original NFile snapshot (not Fiyora stable)
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          target_commitish: ${{ env.ORIGINAL_SHA }}
-          name: NFile Original ${{ env.APP_VERSION }}
-          prerelease: true
-          draft: false
-          make_latest: false
-          body: |
-            Untouched NFile source tree: `${{ env.ORIGINAL_SHA }}` (`apk-build` frozen baseline).
-            Only the external build workflow is new; app source is not edited.
-            This is **not** a Fiyora stable release.
-          files: dist/*
-          fail_on_unmatched_files: true
