@@ -3,7 +3,7 @@ name: FIYORA Diagnostics Beta Validation
 on:
   push:
     branches:
-      - feature/diagnostic-logger-20261112
+      - feature/diagnostic-logger-observability-20261112
 
 permissions:
   contents: read
@@ -40,7 +40,7 @@ jobs:
           fi
 
       - name: Run targeted diagnostic tests
-        run: flutter test test/diagnostic_logger_test.dart
+        run: flutter test test/diagnostic_logger_test.dart test/diagnostic_logger_observability_test.dart
 
       - name: Build arm64-v8a only debug APK (never release)
         run: flutter build apk --debug --split-per-abi --target-platform android-arm64 --no-tree-shake-icons
@@ -61,7 +61,7 @@ jobs:
       - name: Upload arm64-v8a test-only APK
         uses: actions/upload-artifact@v4
         with:
-          name: FIYORA-diagnostic-logger-arm64-v8a-debug-apk
+          name: FIYORA-diagnostic-logger-observability-arm64-v8a-debug-apk
           path: build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk
           retention-days: 7
           if-no-files-found: error
