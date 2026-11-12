@@ -190,11 +190,19 @@ class DiagnosticLogger {
     }
   }
 
-  void record(DiagnosticEvent event) {
+  void record(DiagnosticEvent event) => _recordSafeCode(event.name);
+
+  /// Outcome captures the operation and exception TYPE, never its message.
+  void recordOutcome(DiagnosticEvent operation, {required bool success, Object? failure}) {
+    final status = success ? 'success' : 'failure';
+    final type = failure == null ? '' : '_' + _safeCode(failure.runtimeType.toString());
+    _recordSafeCode('outcome_' + operation.name + '_' + status + type);
+  }
+
+  void _recordSafeCode(String code) {
     if (_dir == null) return;
     try {
-      final entry = _line(event.name);
-      // Only fixed enum values reach disk; never raw user-generated strings.
+      final entry = _line(code);
       _appendBounded(_file('breadcrumbs.txt'), entry, _breadcrumbLimit);
       if (_manualActive) {
         _appendBounded(_file('manual_session.txt'), entry, _manualLimit);
