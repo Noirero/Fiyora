@@ -14,11 +14,11 @@ concurrency:
 
 jobs:
   beta:
-    name: Publish Fiyora beta (apk-beta)
+    name: Build Fiyora beta (apk-beta)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Enforce manual dispatch from apk-beta
         shell: bash
@@ -42,10 +42,8 @@ jobs:
           test "$SOURCE_SHA" = "$GITHUB_SHA" || { echo "Dispatched commit differs from checkout"; exit 1; }
           VERSION="$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' pubspec.yaml | head -n1)"
           test -n "$VERSION"
-          TAG="fiyora-beta-v${VERSION}-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
           echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
           echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
           # Existing preview workflow used 100000 + its own run number; use a
           # higher range so upgrades from previous preview APKs are possible.
           echo "BUILD_NUMBER=$((200000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
@@ -123,33 +121,3 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-      - name: Ensure beta branch still matches the built source
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          CURRENT_BETA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/apk-beta" --jq .object.sha)"
-          test "$CURRENT_BETA" = "$SOURCE_SHA" || {
-            echo 'apk-beta changed during the build; refusing to publish a stale preview.'
-            exit 1
-          }
-
-      - name: Publish beta GitHub prerelease
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          target_commitish: ${{ env.SOURCE_SHA }}
-          name: Fiyora Beta ${{ env.APP_VERSION }} (run ${{ github.run_id }})
-          prerelease: true
-          draft: false
-          make_latest: false
-          body: |
-            Preview build from `apk-beta`.
-
-            Source commit: `${{ env.SOURCE_SHA }}`
-            Build workflow: `${{ github.workflow }}` / run `${{ github.run_id }}` (attempt `${{ github.run_attempt }}`).
-            Package ID: `com.noirero.fiyora.preview` (does not replace production Fiyora/NFile installation).
-            This build requires explicit beta testing; CI success is not physical-device acceptance.
-          files: dist/*
-          fail_on_unmatched_files: true
