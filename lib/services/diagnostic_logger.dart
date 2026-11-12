@@ -107,13 +107,17 @@ class DiagnosticLogger {
                 _file('crash_report.txt').lastModifiedSync().millisecondsSinceEpoch >= previousLaunch
             ? _file('crash_report.txt').readAsStringSync()
             : '';
-        _writeCrashReport(
+        if (classification == 'confirmed_crash' ||
+            exceptionReport.isNotEmpty ||
+            !_exists('crash_report.txt')) {
+          _writeCrashReport(
           'Classification: $classification\n'
           'Android exit reason: $reason\n'
           'Exit time (epoch ms): $timestamp\n'
           'Note: Android exit reason does not guarantee a stack trace.\n'
           + (exceptionReport.isEmpty ? '' : '\nCaptured Dart exception:\n$exceptionReport\n'),
-        );
+          );
+        }
         _file('consumed_exit_ms.txt').writeAsStringSync('$timestamp', flush: true);
       } else if (interrupted) {
         _startupClassification = 'unknown_termination';
