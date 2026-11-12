@@ -324,8 +324,8 @@ class DiagnosticLogger {
   static String safeApplicationFrames(StackTrace? trace) {
     if (trace == null) return '';
     final result = <String>[];
-    final frame = RegExp(r'^#\\d+\\s+(.+?)\\s+\\((package:nfile/[a-zA-Z0-9_./:-]+)\\)');
-    for (final entry in trace.toString().split('\\n')) {
+    final frame = RegExp(r'^#\d+\s+(.+?)\s+\((package:nfile/[a-zA-Z0-9_./:-]+)\)');
+    for (final entry in trace.toString().split('\n')) {
       final match = frame.firstMatch(entry.trim());
       if (match == null) continue;
       final method = match.group(1)!.replaceAll(RegExp(r'[^a-zA-Z0-9_.$<> ]'), '');
