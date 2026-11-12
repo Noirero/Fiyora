@@ -29,6 +29,8 @@ import android.content.BroadcastReceiver
 import android.content.IntentFilter
 import androidx.core.app.NotificationCompat
 import android.content.Context
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
@@ -39,6 +41,35 @@ import android.os.Process
 
 class MainActivity : AudioServiceFragmentActivity() {
     private val CHANNEL = "com.rubex.nfile/root_shizuku"
+
+    // Android 11+ only. Classification is based on the OS exit code;
+    // it must never be presented as a recovered stack trace.
+    private fun lastDiagnosticExit(): Map<String, Any>? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val exit = activityManager
+            .getHistoricalProcessExitReasons(packageName, 0, 10)
+            .firstOrNull() ?: return null
+        val reason = when (exit.reason) {
+            ApplicationExitInfo.REASON_CRASH -> "java_crash"
+            ApplicationExitInfo.REASON_CRASH_NATIVE -> "native_crash"
+            ApplicationExitInfo.REASON_ANR -> "anr"
+            ApplicationExitInfo.REASON_LOW_MEMORY -> "low_memory"
+            ApplicationExitInfo.REASON_USER_REQUESTED -> "user_requested"
+            ApplicationExitInfo.REASON_EXIT_SELF -> "self_exit"
+            else -> "other"
+        }
+        val classification = when (exit.reason) {
+            ApplicationExitInfo.REASON_CRASH,
+            ApplicationExitInfo.REASON_CRASH_NATIVE -> "confirmed_crash"
+            else -> "process_termination"
+        }
+        return mapOf(
+            "timestamp" to exit.timestamp,
+            "reason" to reason,
+            "classification" to classification
+        )
+    }
     private val SHIZUKU_REQUEST_CODE = 10001
     private val executor = Executors.newCachedThreadPool()
     private var pendingPermissionResult: MethodChannel.Result? = null
@@ -140,6 +171,20 @@ class MainActivity : AudioServiceFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.rubex.nfile/diagnostics"
+        ).setMethodCallHandler { call, result ->
+            if (call.method == "lastExit") {
+                try {
+                    result.success(lastDiagnosticExit())
+                } catch (_: Exception) {
+                    result.success(null)
+                }
+            } else {
+                result.notImplemented()
+            }
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "checkStatus" -> {
