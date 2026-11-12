@@ -1,11 +1,11 @@
-# NFile
+# Fiyora Explorer
 
 A beautiful File Manager application built with Flutter.
 
 ## Overview
-NFile is designed to provide a highly aesthetic file management experience on Android. It features a stunning interface with an exclusive "Broken" icon pack, dynamic AMOLED-friendly dark mode, and a fluid user experience. 
+Fiyora Explorer is designed to provide a highly aesthetic file management experience on Android. It features a stunning interface with an exclusive "Broken" icon pack, dynamic AMOLED-friendly dark mode, and a fluid user experience. 
 
-With the latest update, NFile transitions from a simple file explorer to a comprehensive media hub with built-in high-performance players and viewers.
+With the latest update, Fiyora Explorer transitions from a simple file explorer to a comprehensive media hub with built-in high-performance players and viewers.
 
 ## Features
 - **Premium UI/UX:** A textured and alpha-blended aesthetic that gives a modern, glassmorphic feel to your file browsing.

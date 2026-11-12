@@ -49,7 +49,7 @@ class FtpForegroundService : Service() {
         }
 
         val notification = builder
-            .setContentTitle("NFile FTP Server")
+            .setContentTitle("Fiyora FTP Server")
             .setContentText("Running at ftp://$ip:$port")
             .setSmallIcon(iconResId)
             .setContentIntent(pendingIntent)

@@ -7,6 +7,7 @@ import '../../core/icon_fonts/broken_icons.dart';
 import '../../core/utils.dart';
 import '../../providers/file_manager_provider.dart';
 import '../../services/archive_service.dart';
+import '../../services/archive_format_support.dart';
 import 'internal_file_picker_screen.dart';
 
 class ArchiveItem {
@@ -462,7 +463,16 @@ class _ArchiveViewerScreenState extends State<ArchiveViewerScreen> {
         body: _isLoading
             ? const Center(child: CircularProgressIndicator())
             : _archive == null
-                ? const Center(child: Text('Could not read archive'))
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        ArchiveFormatSupport.unavailablePreviewReason(widget.archivePath) ??
+                            'Could not read archive',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  )
                 : items.isEmpty
                     ? const Center(child: Text('Folder is empty'))
                     : ListView.builder(

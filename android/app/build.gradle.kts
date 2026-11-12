@@ -41,7 +41,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.rubex.nfile"
+        applicationId = "com.noirero.fiyora"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

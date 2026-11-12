@@ -44,8 +44,8 @@ jobs:
           CURRENT_MAIN="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
           test "$SOURCE_SHA" = "$CURRENT_MAIN" || { echo 'main moved after dispatch'; exit 1; }
 
-          # Do not publish an NFile-branded APK under the FIYORA Stable label.
-          grep -Fq 'applicationId = "com.rubex.nfile"' android/app/build.gradle.kts
+          # Publish only a correctly branded FIYORA Stable APK with its independent package ID.
+          grep -Fq 'applicationId = "com.noirero.fiyora"' android/app/build.gradle.kts
           grep -Fq 'android:label="Fiyora Explorer"' android/app/src/main/AndroidManifest.xml
           VERSION="$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' pubspec.yaml | head -n1)"
           test -n "$VERSION"
@@ -83,7 +83,7 @@ jobs:
             echo '// Workaround: duplicate class conflicts with Kotlin plugin.' > "$FILE"
           fi
 
-      - name: Configure stable NFile-compatible signing key
+      - name: Configure FIYORA Stable signing key
         shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -121,7 +121,7 @@ jobs:
             APK="build/app/outputs/flutter-apk/app-${ABI}-release.apk"
             test -s "$APK"
             "$APKSIGNER" verify --print-certs "$APK"
-            "$AAPT" dump badging "$APK" | grep -Fq "package: name='com.rubex.nfile'"
+            "$AAPT" dump badging "$APK" | grep -Fq "package: name='com.noirero.fiyora'"
             cp "$APK" "dist/Fiyora-v${APP_VERSION}-${ABI}.apk"
           done
           (cd dist && sha256sum ./*.apk > SHA256SUMS.txt)

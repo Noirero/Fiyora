@@ -297,7 +297,7 @@ class NFileDrawer extends StatelessWidget {
                     _buildDrawerTile(
                       context,
                       icon: Broken.info_circle,
-                      title: 'About NFile',
+                      title: 'About Fiyora',
                       onTap: () {
                         Navigator.pop(context);
                         Navigator.push(
@@ -316,7 +316,7 @@ class NFileDrawer extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 12.0),
               child: Text(
-                'NFile v1.0.42',
+                'Fiyora Explorer',
                 style: TextStyle(fontSize: 11.5, color: theme.colorScheme.onSurface.withOpacity(0.4), fontWeight: FontWeight.w600),
               ),
             ),
@@ -367,7 +367,7 @@ class NFileDrawer extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'NFile',
+                  'Fiyora',
                   style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 0.5),
                 ),
                 const SizedBox(height: 2),

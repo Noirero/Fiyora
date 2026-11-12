@@ -19,8 +19,8 @@ All three APK workflows use only `workflow_dispatch`; push/commit alone cannot p
 
 - GitHub needs `.github/workflows/beta.yml` on both `main` and `apk-beta` to make `apk-beta` a genuine dispatchable option. PR **#13** adds the Beta branch file; PR **#14** updates the default branch file.
 - Likewise, `.github/workflows/apk-build.yml` must exist on both `main` and `apk-build`. PR **#15** adds the workflow-only file to `apk-build`; PR **#14** updates the default branch version. **The application source of NFile Original is not changed**; the build checks out the frozen original commit.
-- Current `main` still uses the NFile launcher label. The Stable workflow intentionally **fails** until the actual FIYORA branding/source is correctly promoted to `main`. Do not label an unbranded NFile APK as FIYORA Stable.
-- Stable and Original preserve the `com.rubex.nfile` Android application ID; only one can be installed under that ID. Ensure release signing is compatible with upgrade history. Beta uses `com.noirero.fiyora.preview` and can coexist with it.
+- Stable verifies FIYORA branding (`Fiyora Explorer`) and Android package ID `com.noirero.fiyora` before building. If either guard fails, the workflow stops before publication. Merging source or passing automatic CI never publishes a Stable release; only a manual `Run workflow` on `main` can do so.
+- Stable uses `com.noirero.fiyora`, Beta uses `com.noirero.fiyora.preview`, and Original NFile keeps `com.rubex.nfile`. These are three distinct Android apps and can be installed side by side. Stable is not an in-place update of NFile; app-private data is not automatically migrated. Use a controlled long-lived Stable signing key.
 
 ## Signing and download
 
