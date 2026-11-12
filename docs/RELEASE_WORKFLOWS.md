@@ -2,7 +2,7 @@
 
 | Actions workflow | Select branch | APK source | Result |
 |---|---|---|---|
-| `main — Fiyora Stable (manual)` | `main` | Exact dispatched `main` SHA | **Public GitHub Release**, not draft/prerelease |
+| `Fiyora Stable (manual)` | `main` | Exact dispatched `main` SHA | **Public GitHub Release**, not draft/prerelease |
 | `beta — Fiyora Beta (manual)` | `apk-beta` | Exact dispatched `apk-beta` SHA | **Actions artifact** containing signed ARM64 Beta APK + SHA256SUMS; **no GitHub Release** |
 | `apk-build — NFile Original (manual)` | `apk-build` | Frozen NFile source commit `00dcc955bbb0af0c0b0d963f644e6980d1ed67e5` | **Actions artifact** containing signed original ABI-split APKs + SHA256SUMS; **no GitHub Release** |
 
