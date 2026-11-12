@@ -1,0 +1,124 @@
+name: beta — Fiyora Beta (manual)
+
+# Keep this workflow on the default branch for Actions discoverability; dispatch it on apk-beta.
+# The selected run ref and checkout commit must match, as in Miyorare Beta.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fiyora-beta-publish
+  cancel-in-progress: false
+
+jobs:
+  beta:
+    name: Build Fiyora beta (apk-beta)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Enforce manual dispatch from apk-beta
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/apk-beta
+      - name: Checkout dispatched beta commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Capture source and assert beta identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'applicationId = "com.noirero.fiyora.preview"' android/app/build.gradle.kts
+          grep -Fq 'android:label="Fiyora Explorer Beta"' android/app/src/main/AndroidManifest.xml
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          test "$SOURCE_SHA" = "$GITHUB_SHA" || { echo "Dispatched commit differs from checkout"; exit 1; }
+          VERSION="$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' pubspec.yaml | head -n1)"
+          test -n "$VERSION"
+          echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
+          # Existing preview workflow used 100000 + its own run number; use a
+          # higher range so upgrades from previous preview APKs are possible.
+          echo "BUILD_NUMBER=$((200000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Apply existing flutter_avif_android CI workaround
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="$(find "$HOME/.pub-cache" -name FlutterAvifPlugin.java -print -quit 2>/dev/null || true)"
+          if [ -n "$FILE" ]; then
+            echo '// Workaround: duplicate class conflicts with Kotlin plugin.' > "$FILE"
+          fi
+
+      - name: Configure preview signing (existing secret names)
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MRARE_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.MRARE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.MRARE_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.MRARE_STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for value in "$KEYSTORE_BASE64" "$KEY_ALIAS" "$KEY_PASSWORD" "$STORE_PASSWORD"; do
+            test -n "$value" || { echo 'Preview signing secrets are incomplete'; exit 1; }
+          done
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/fiyora-signing.jks
+          {
+            printf 'storePassword=%s\n' "$STORE_PASSWORD"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'storeFile=fiyora-signing.jks\n'
+          } > android/key.properties
+          chmod 600 android/key.properties android/app/fiyora-signing.jks
+
+      - name: Build ARM64 preview APK
+        run: |
+          flutter build apk --release --split-per-abi \
+            --build-number "$BUILD_NUMBER" --no-tree-shake-icons
+
+      - name: Verify and collect beta APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          test -s "$APK"
+          ABIS="$(unzip -Z1 "$APK" | sed -n 's#^lib/\([^/]*\)/.*#\1#p' | sort -u)"
+          test "$ABIS" = arm64-v8a || { echo "Unexpected ABI(s): $ABIS"; exit 1; }
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n1)"
+          AAPT="$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n1)"
+          test -x "$APKSIGNER" && test -x "$AAPT"
+          "$APKSIGNER" verify --print-certs "$APK"
+          "$AAPT" dump badging "$APK" | grep -Fq "package: name='com.noirero.fiyora.preview'"
+          mkdir -p dist
+          cp "$APK" "dist/Fiyora-beta-v${APP_VERSION}-arm64-v8a.apk"
+          (cd dist && sha256sum ./*.apk > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Upload immutable build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fiyora-beta-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/
+          if-no-files-found: error
+
