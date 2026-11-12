@@ -2782,9 +2782,24 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> extractArchiveDirectly(BuildContext context, String path) async {
-    DiagnosticLogger.instance.record(DiagnosticEvent.archiveExtract);
+    final logger = DiagnosticLogger.instance;
+    final diagnosticId = logger.nextArchiveOperationId();
+    final format = DiagnosticLogger.archiveFormatCode(path);
+    final started = Stopwatch()..start();
+    logger.recordArchivePhase(
+      operationId: diagnosticId,
+      phase: DiagnosticArchivePhase.requested,
+      format: format,
+    );
+
     final unsupported = ArchiveFormatSupport.unavailableExtractionReason(path);
     if (unsupported != null) {
+      logger.recordArchivePhase(
+        operationId: diagnosticId,
+        phase: DiagnosticArchivePhase.unsupported,
+        format: format,
+        failure: DiagnosticArchiveFailure.unsupportedFormat,
+      );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(unsupported)),
       );
@@ -2797,17 +2812,43 @@ class FileManagerProvider extends ChangeNotifier {
       archiveName: p.basename(path),
       defaultDestDir: destDir,
     );
-    if (res == null || !context.mounted) return;
+    if (res == null || !context.mounted) {
+      logger.recordArchivePhase(
+        operationId: diagnosticId,
+        phase: DiagnosticArchivePhase.dialogCanceled,
+        format: format,
+        elapsedMs: started.elapsedMilliseconds,
+      );
+      return;
+    }
+    logger.recordArchivePhase(
+      operationId: diagnosticId,
+      phase: DiagnosticArchivePhase.configured,
+      format: format,
+      elapsedMs: started.elapsedMilliseconds,
+    );
 
     if (ArchiveFormatSupport.isSplitZipFirstVolume(path)) {
-      // The direct extractor recombines .zip.001, .002, etc. first.
-      // Background extraction cannot do that, so never dispatch it there.
+      // Split ZIP must be handled in-process; background isolate cannot join
+      // its volumes. Do not mark success before the awaited extraction returns.
       final originalDirectory = currentPath;
+      logger.recordArchivePhase(
+        operationId: diagnosticId,
+        phase: DiagnosticArchivePhase.workerStarted,
+        format: format,
+        elapsedMs: started.elapsedMilliseconds,
+      );
       try {
         await ArchiveService.extractArchive(
           archivePath: path,
           destinationDir: res.destinationDir,
           password: res.password,
+        );
+        logger.recordArchivePhase(
+          operationId: diagnosticId,
+          phase: DiagnosticArchivePhase.completed,
+          format: format,
+          elapsedMs: started.elapsedMilliseconds,
         );
         if (!context.mounted) return;
         if (currentPath == originalDirectory) {
@@ -2818,7 +2859,16 @@ class FileManagerProvider extends ChangeNotifier {
             const SnackBar(content: Text('Split ZIP archive extracted successfully')),
           );
         }
-      } catch (e) {
+      } catch (e, stack) {
+        logger.recordArchivePhase(
+          operationId: diagnosticId,
+          phase: DiagnosticArchivePhase.failed,
+          format: format,
+          elapsedMs: started.elapsedMilliseconds,
+          failure: DiagnosticLogger.archiveFailureCode(e),
+          exceptionType: e.runtimeType.toString(),
+          applicationFrames: DiagnosticLogger.safeApplicationFrames(stack),
+        );
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Split ZIP extraction failed: $e')),
@@ -2831,6 +2881,7 @@ class FileManagerProvider extends ChangeNotifier {
         archivePath: path,
         destinationDir: res.destinationDir,
         password: res.password,
+        diagnosticId: diagnosticId,
       );
     }
   }
