@@ -1684,7 +1684,8 @@ class FileManagerProvider extends ChangeNotifier {
         _sortList(filteredFolders, path);
         _sortList(filteredFiles, path);
         activeTab.currentFiles = [...filteredFolders, ...filteredFiles];
-      } catch (e) {
+      } catch (e, stack) {
+        DiagnosticLogger.instance.recordHandledError(DiagnosticEvent.directoryLoad, e, stack);
         debugPrint('Error loading restricted directory: $e');
         activeTab.currentFiles = [];
       }
@@ -1729,7 +1730,8 @@ class FileManagerProvider extends ChangeNotifier {
 
         activeTab.currentFiles = [...filteredFolders, ...filteredFiles];
       }
-    } catch (e) {
+    } catch (e, stack) {
+      DiagnosticLogger.instance.recordHandledError(DiagnosticEvent.directoryLoad, e, stack);
       debugPrint('Error loading directory: $e. Fallback to restricted mode.');
       // Auto fallback to restricted mode
       activeTab.isRestrictedMode = true;
@@ -1766,7 +1768,8 @@ class FileManagerProvider extends ChangeNotifier {
         _sortList(filteredFolders, path);
         _sortList(filteredFiles, path);
         activeTab.currentFiles = [...filteredFolders, ...filteredFiles];
-      } catch (err) {
+      } catch (err, stack) {
+        DiagnosticLogger.instance.recordHandledError(DiagnosticEvent.directoryLoad, err, stack);
         debugPrint('Error loading restricted directory fallback: $err');
         activeTab.currentFiles = [];
       }
@@ -1925,7 +1928,8 @@ class FileManagerProvider extends ChangeNotifier {
             ),
           );
         }
-      } catch (e) {
+      } catch (e, stack) {
+        DiagnosticLogger.instance.recordHandledError(DiagnosticEvent.pasteStarted, e, stack);
         debugPrint('Error pasting inside restricted directory: $e');
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -2273,7 +2277,8 @@ class FileManagerProvider extends ChangeNotifier {
         }
       });
 
-    } catch (e) {
+    } catch (e, stack) {
+      DiagnosticLogger.instance.recordHandledError(DiagnosticEvent.pasteStarted, e, stack);
       debugPrint('Error pasting file: $e');
     } finally {
       progressNotifier.value = null;
@@ -2750,7 +2755,8 @@ class FileManagerProvider extends ChangeNotifier {
           deleteSource: deleteSource,
           separateArchives: separateArchives,
         );
-      } catch (e) {
+      } catch (e, stack) {
+        DiagnosticLogger.instance.recordHandledError(DiagnosticEvent.archiveCreate, e, stack);
         debugPrint('Error creating archive: $e');
       }
 
