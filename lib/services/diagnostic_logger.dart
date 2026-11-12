@@ -308,12 +308,18 @@ class DiagnosticLogger {
         retained.insert(0, line);
         used += bytes;
       }
-      target.writeAsStringSync(
+      // Write the replacement separately, then swap it into place. A crash
+      // during trimming must not leave the previous breadcrumb file empty.
+      final replacement = File(target.path + '.rotating');
+      replacement.writeAsStringSync(
         '... older entries truncated (bounded log) ...\n'
         + (retained.isEmpty ? '' : retained.join('\n') + '\n'),
         flush: true,
       );
+      replacement.renameSync(target.path);
     }
-    target.writeAsStringSync(entry, mode: FileMode.append, flush: true);
+    // A completed kernel write survives an app process crash; avoid fsync on
+    // every UI event to reduce main-isolate stalls. Fatal reports use flush.
+    target.writeAsStringSync(entry, mode: FileMode.append);
   }
 }
