@@ -92,7 +92,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
                   ),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
-                    onPressed: hasManual && !_saving ? () => _export(crash: false) : null,
+                    onPressed: hasManual && !_saving && !logging ? () => _export(crash: false) : null,
                     icon: const Icon(Icons.save_alt),
                     label: const Text('Export session TXT to Downloads'),
                   ),
@@ -143,7 +143,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
                       style: theme.textTheme.bodySmall,
                     ),
                     TextButton.icon(
-                      onPressed: () {
+                      onPressed: _saving ? null : () {
                         _logger.clearCrashReport();
                         setState(() {});
                       },
