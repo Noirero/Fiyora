@@ -1,4 +1,4 @@
-name: main — Fiyora Stable (manual)
+name: Fiyora Stable (manual)
 
 # Manual, audited promotion. Never automatically publishes main on push.
 on:
@@ -163,8 +163,8 @@ jobs:
           draft: false
           make_latest: true
           body: |
-            Public Fiyora Stable release built manually from exact main commit \`${{ env.SOURCE_SHA }}\`.
-            GitHub Actions run: \`${{ github.run_id }}\`, attempt \`${{ github.run_attempt }}\`.
+            Public Fiyora Stable release built manually from exact main commit `${{ env.SOURCE_SHA }}`.
+            GitHub Actions run: `${{ github.run_id }}`, attempt `${{ github.run_attempt }}`.
             APKs are signed and checked in CI. A successful build does not prove physical-device behavior.
           files: dist/*
           fail_on_unmatched_files: true
