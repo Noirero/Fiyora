@@ -16,6 +16,8 @@ jobs:
     name: Build and publish FIYORA Stable
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    env:
+      EXPECTED_CERT_SHA256: 'dfcb5468d7e280befbe5ffdb0b4fe04cc0ced10810abb5c5fdc7a4dd48d02935'
     permissions:
       contents: write
       actions: read
@@ -86,23 +88,23 @@ jobs:
       - name: Configure FIYORA Stable signing key
         shell: bash
         env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEYSTORE_BASE64: ${{ secrets.FIYORA_STABLE_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.FIYORA_STABLE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.FIYORA_STABLE_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.FIYORA_STABLE_STORE_PASSWORD }}
         run: |
           set -euo pipefail
           for value in "$KEYSTORE_BASE64" "$KEY_ALIAS" "$KEY_PASSWORD" "$STORE_PASSWORD"; do
-            test -n "$value" || { echo 'Stable signing secrets are incomplete'; exit 1; }
+            test -n "$value" || { echo 'FIYORA Stable signing secrets (FIYORA_STABLE_*) are incomplete'; exit 1; }
           done
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/fiyora-stable-signing.jks
           {
             printf 'storePassword=%s\n' "$STORE_PASSWORD"
             printf 'keyPassword=%s\n' "$KEY_PASSWORD"
             printf 'keyAlias=%s\n' "$KEY_ALIAS"
-            printf 'storeFile=upload-keystore.jks\n'
+            printf 'storeFile=fiyora-stable-signing.jks\n'
           } > android/key.properties
-          chmod 600 android/key.properties android/app/upload-keystore.jks
+          chmod 600 android/key.properties android/app/fiyora-stable-signing.jks
 
       - name: Build stable release-mode APKs
         run: |
@@ -120,7 +122,12 @@ jobs:
           for ABI in arm64-v8a armeabi-v7a x86_64; do
             APK="build/app/outputs/flutter-apk/app-${ABI}-release.apk"
             test -s "$APK"
-            "$APKSIGNER" verify --print-certs "$APK"
+            CERTS="$("$APKSIGNER" verify --print-certs "$APK")"
+            printf '%s\n' "$CERTS"
+            printf '%s\n' "$CERTS" | grep -Fiq "Signer #1 certificate SHA-256 digest: $EXPECTED_CERT_SHA256" || {
+              echo 'FIYORA Stable signing certificate does not match the pinned identity.'
+              exit 1
+            }
             "$AAPT" dump badging "$APK" | grep -Fq "package: name='com.noirero.fiyora'"
             cp "$APK" "dist/Fiyora-v${APP_VERSION}-${ABI}.apk"
           done
