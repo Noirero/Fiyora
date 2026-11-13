@@ -2850,21 +2850,6 @@ class FileManagerProvider extends ChangeNotifier {
           destinationDir: res.destinationDir,
           password: res.password,
         );
-        logger.recordArchivePhase(
-          operationId: diagnosticId,
-          phase: DiagnosticArchivePhase.completed,
-          format: format,
-          elapsedMs: started.elapsedMilliseconds,
-        );
-        if (!context.mounted) return;
-        if (currentPath == originalDirectory) {
-          await loadDirectory(originalDirectory, showLoading: false, clearCache: true);
-        }
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Split ZIP archive extracted successfully')),
-          );
-        }
       } catch (e, stack) {
         logger.recordArchivePhase(
           operationId: diagnosticId,
@@ -2880,6 +2865,26 @@ class FileManagerProvider extends ChangeNotifier {
             SnackBar(content: Text('Split ZIP extraction failed: $e')),
           );
         }
+        return;
+      }
+      logger.recordArchivePhase(
+        operationId: diagnosticId,
+        phase: DiagnosticArchivePhase.completed,
+        format: format,
+        elapsedMs: started.elapsedMilliseconds,
+      );
+      if (!context.mounted) return;
+      if (currentPath == originalDirectory) {
+        try {
+          await loadDirectory(originalDirectory, showLoading: false, clearCache: true);
+        } catch (e, stack) {
+          logger.recordHandledError(DiagnosticEvent.directoryLoad, e, stack);
+        }
+      }
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Split ZIP archive extracted successfully')),
+        );
       }
     } else {
       await BackgroundArchiveService.instance.startExtraction(

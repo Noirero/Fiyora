@@ -84,9 +84,18 @@ class DiagnosticLogger {
   /// intentionally kept until the user explicitly starts a fresh manual session.
   Future<void> initialize() async {
     try {
-      final support = await getApplicationSupportDirectory();
-      _dir = Directory(support.path + Platform.pathSeparator + 'diagnostics');
-      _dir!.createSync(recursive: true);
+      // Never fall back to backup-eligible storage on Android.
+      final supportPath = Platform.isAndroid
+          ? await _android.invokeMethod<String>('storagePath')
+          : (await getApplicationSupportDirectory()).path;
+      if (supportPath == null || supportPath.isEmpty) {
+        _writeFailed = true;
+        return;
+      }
+      final directory =
+          Directory(supportPath + Platform.pathSeparator + 'diagnostics');
+      directory.createSync(recursive: true);
+      _dir = directory;
       final marker = _file('manual_active.flag');
       final interrupted = marker.existsSync();
       if (interrupted) {

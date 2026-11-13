@@ -26,6 +26,8 @@
     <application
         android:label="Fiyora Explorer Beta"
         android:name="${applicationName}"
+        android:fullBackupContent="@xml/fiyora_backup_rules"
+        android:dataExtractionRules="@xml/fiyora_data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="true"
         android:enableOnBackInvokedCallback="true">

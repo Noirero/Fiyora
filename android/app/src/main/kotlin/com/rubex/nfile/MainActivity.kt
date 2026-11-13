@@ -175,7 +175,9 @@ class MainActivity : AudioServiceFragmentActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             "com.rubex.nfile/diagnostics"
         ).setMethodCallHandler { call, result ->
-            if (call.method == "lastExit") {
+            if (call.method == "storagePath") {
+                result.success(noBackupFilesDir.absolutePath)
+            } else if (call.method == "lastExit") {
                 try {
                     result.success(lastDiagnosticExit())
                 } catch (_: Exception) {
