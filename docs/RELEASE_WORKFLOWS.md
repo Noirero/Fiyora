@@ -5,17 +5,17 @@
 | `Fiyora Stable (manual)` | `main` | Exact dispatched `main` SHA | **Public GitHub Release**, not draft/prerelease |
 | `Fiyora Stable Candidate (manual)` | `main` | Exact dispatched `main` SHA | **Signed APK in Actions artifacts**, **no Release** |
 | `beta — Fiyora Beta (manual)` | `apk-beta` | Exact dispatched `apk-beta` SHA | **Actions artifact** containing signed ARM64 Beta APK + SHA256SUMS; **no GitHub Release** |
-| `apk-build — NFile Original (manual)` | `apk-build` | Frozen NFile source commit `00dcc955bbb0af0c0b0d963f644e6980d1ed67e5` | **Actions artifact** containing signed original ABI-split APKs + SHA256SUMS; **no GitHub Release** |
+| `apk-build — NFile Original (manual)` | `apk-build` | Frozen NFile source commit `00dcc955bbb0af0c0b0d963f644e6980d1ed67e5` | **Actions artifact** containing signed original ARM64 APK + SHA256SUMS; **no GitHub Release** |
 
 ## How to run
 
 Open GitHub **Actions**, select the workflow, click **Run workflow**, choose the branch from the table, and run it.
 All manual APK workflows use only `workflow_dispatch`; push/commit alone cannot publish a GitHub release. The separate `Fiyora PR Build Check` workflow validates changes targeting `main` but cannot publish.
 
-- **Stable**: Runs Flutter tests, checks production package and branding, signs three ABI-split APKs, verifies signatures/checksums and checks that the `main` source has not moved. After success, it publishes **directly** as a public, non-prerelease GitHub Release under a unique `v<version>` tag. Running this workflow is the explicit publication action; there is no extra draft/publish step.
-- **Stable Candidate**: Builds signed Stable APKs, checks the pinned FIYORA production certificate, and uploads APKs/symbols to **Actions artifacts** with **no GitHub Release**. Use it to validate the signed build before an owner-approved public release.
+- **Stable**: Runs Flutter tests, checks production package and branding, signs one ARM64 APK, verifies signatures/checksums and checks that the `main` source has not moved. After success, it publishes **directly** as a public, non-prerelease GitHub Release under a unique `v<version>` tag. Running this workflow is the explicit publication action; there is no extra draft/publish step.
+- **Stable Candidate**: Builds one signed ARM64 Stable APK, checks the pinned FIYORA production certificate, and uploads APKs/symbols to **Actions artifacts** with **no GitHub Release**. Use it to validate the signed build before an owner-approved public release.
 - **Beta**: Builds the exact selected `apk-beta` commit with preview signing. Download the output ZIP under **Actions → completed workflow run → Artifacts**. The ZIP contains the APK and `SHA256SUMS.txt`. No prerelease is created.
-- **Original**: Runs on the selected `apk-build` branch but checks out the **frozen original NFile source commit** for compilation. Download the ZIP under **Actions → completed workflow run → Artifacts**; it contains APKs for ARM64, ARMv7 and x86_64 plus checksums. No prerelease is created.
+- **Original**: Runs on the selected `apk-build` branch but checks out the **frozen original NFile source commit** for compilation. Download the ZIP under **Actions → completed workflow run → Artifacts**; it contains one ARM64 APK plus checksums. No prerelease is created.
 
 ## Branch setup and prerequisites
 

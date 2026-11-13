@@ -16,7 +16,7 @@ Gunakan **Settings → Secrets and variables → Actions → Secrets → New rep
 ## Cara validasi tanpa rilis publik
 
 1. **Actions → Fiyora Stable Candidate (manual) → Run workflow → main.**
-2. Workflow memverifikasi commit `main`, `applicationId`, label aplikasi, menjalankan `flutter test`, membangun signed APK ABI-split menggunakan keystore produksi FIYORA, memverifikasi package ID + sertifikat, kemudian mengunggah APK dan obfuscation symbols sebagai **Actions artifacts**.
+2. Workflow memverifikasi commit `main`, `applicationId`, label aplikasi, menjalankan `flutter test`, membangun satu signed APK `arm64-v8a` menggunakan keystore produksi FIYORA, memverifikasi package ID + sertifikat, kemudian mengunggah APK dan obfuscation symbols sebagai **Actions artifacts**.
 3. Download ZIP di halaman completed run → **Artifacts**. Uji APK di perangkat fisik. Catat run ID, commit SHA, versi, fingerprint signing, dan hasil tes.
 4. **Jangan** menjalankan **Fiyora Stable (manual)** untuk pengujian: workflow itu akan memublikasikan public GitHub Release bila sukses dan hanya boleh dijalankan setelah perintah eksplisit owner.
 
