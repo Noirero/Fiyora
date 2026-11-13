@@ -87,12 +87,12 @@ jobs:
           } > android/key.properties
           chmod 600 android/key.properties android/app/upload-keystore.jks
 
-      - name: Build original ABI-split APKs
+      - name: Build original ARM64 APK
         run: |
-          flutter build apk --release --split-per-abi --obfuscate \
+          flutter build apk --release --target-platform android-arm64 --split-per-abi --obfuscate \
             --split-debug-info=build/app/outputs/symbols --no-tree-shake-icons
 
-      - name: Verify identity, signing, architectures and checksums
+      - name: Verify identity, signing, ARM64 and checksums
         shell: bash
         run: |
           set -euo pipefail
@@ -100,13 +100,13 @@ jobs:
           AAPT="$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n1)"
           test -x "$APKSIGNER" && test -x "$AAPT"
           mkdir -p dist
-          for ABI in arm64-v8a armeabi-v7a x86_64; do
-            APK="build/app/outputs/flutter-apk/app-${ABI}-release.apk"
-            test -s "$APK"
-            "$APKSIGNER" verify --print-certs "$APK"
-            "$AAPT" dump badging "$APK" | grep -Fq "package: name='com.rubex.nfile'"
-            cp "$APK" "dist/NFile-original-v${APP_VERSION}-${ABI}.apk"
-          done
+          APK="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
+          test -s "$APK"
+          ABIS="$(unzip -Z1 "$APK" | sed -n 's#^lib/\([^/]*\)/.*#\1#p' | sort -u)"
+          test "$ABIS" = arm64-v8a || { echo "Unexpected ABI(s): $ABIS"; exit 1; }
+          "$APKSIGNER" verify --print-certs "$APK"
+          "$AAPT" dump badging "$APK" | grep -Fq "package: name='com.rubex.nfile'"
+          cp "$APK" "dist/NFile-original-v${APP_VERSION}-arm64-v8a.apk"
           (cd dist && sha256sum ./*.apk > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
 
