@@ -118,7 +118,18 @@ jobs:
             test -s "$APK"
             CERTS="$("$APKSIGNER" verify --print-certs "$APK")"
             printf '%s\n' "$CERTS"
-            printf '%s\n' "$CERTS" | grep -Fiq "Signer #1 certificate SHA-256 digest: $EXPECTED_CERT_SHA256" || {
+            # apksigner labels vary by version and signature scheme; compare the full digest.
+            LC_ALL=C awk -v expected="$EXPECTED_CERT_SHA256" '
+              /certificate SHA-256 digest:/ {
+                digest = $0
+                sub(/^.*certificate SHA-256 digest:[[:space:]]*/, "", digest)
+                sub(/[[:space:]]+$/, "", digest)
+                seen = 1
+                if (length(digest) != 64 || digest !~ /^[0-9A-Fa-f]+$/ ||
+                    tolower(digest) != tolower(expected)) mismatch = 1
+              }
+              END { exit (!seen || mismatch) }
+            ' <<< "$CERTS" || {
               echo 'FIYORA Stable signing certificate does not match the pinned identity.'
               exit 1
             }
