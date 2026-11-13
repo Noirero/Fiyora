@@ -94,7 +94,7 @@ jobs:
 
       - name: Build ARM64 preview APK
         run: |
-          flutter build apk --release --split-per-abi \
+          flutter build apk --release --target-platform android-arm64 --split-per-abi \
             --build-number "$BUILD_NUMBER" --no-tree-shake-icons
 
       - name: Verify and collect beta APK
