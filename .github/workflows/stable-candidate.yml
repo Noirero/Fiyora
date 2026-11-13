@@ -151,6 +151,6 @@ jobs:
           set -euo pipefail
           CURRENT_MAIN="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
           test "$CURRENT_MAIN" = "$SOURCE_SHA" || {
-            echo 'main changed during build; refusing to publish stale Stable APK.'
+            echo 'main changed during candidate build; refusing to validate a stale source.'
             exit 1
           }
