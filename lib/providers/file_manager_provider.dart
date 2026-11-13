@@ -23,6 +23,7 @@ import '../services/apk_installer_service.dart';
 import '../ui/widgets/extract_archive_dialog.dart';
 import '../core/utils.dart';
 import '../services/preferences_service.dart';
+import '../services/diagnostic_logger.dart';
 import '../services/app_manager_service.dart';
 import '../models/custom_shortcut_model.dart';
 import '../services/root_shizuku_service.dart';
@@ -926,6 +927,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> loadDirectoryForTab(int tabIndex, String path, {bool showLoading = true, bool clearCache = false}) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.directoryLoad);
     if (tabIndex >= 0 && tabIndex < _tabs.length) {
       final oldIndex = _activeTabIndex;
       _activeTabIndex = tabIndex;
@@ -1620,6 +1622,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> loadDirectory(String path, {bool showLoading = true, bool clearCache = false}) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.directoryLoad);
     deactivateSearchForTab(activeTab);
     // Normalize legacy sdcard paths to canonical /storage/emulated/0
     String resolvedPath = path.replaceAll(RegExp(r'/+'), '/');
@@ -1681,7 +1684,8 @@ class FileManagerProvider extends ChangeNotifier {
         _sortList(filteredFolders, path);
         _sortList(filteredFiles, path);
         activeTab.currentFiles = [...filteredFolders, ...filteredFiles];
-      } catch (e) {
+      } catch (e, stack) {
+        DiagnosticLogger.instance.recordHandledError(DiagnosticEvent.directoryLoad, e, stack);
         debugPrint('Error loading restricted directory: $e');
         activeTab.currentFiles = [];
       }
@@ -1726,7 +1730,8 @@ class FileManagerProvider extends ChangeNotifier {
 
         activeTab.currentFiles = [...filteredFolders, ...filteredFiles];
       }
-    } catch (e) {
+    } catch (e, stack) {
+      DiagnosticLogger.instance.recordHandledError(DiagnosticEvent.directoryLoad, e, stack);
       debugPrint('Error loading directory: $e. Fallback to restricted mode.');
       // Auto fallback to restricted mode
       activeTab.isRestrictedMode = true;
@@ -1763,7 +1768,8 @@ class FileManagerProvider extends ChangeNotifier {
         _sortList(filteredFolders, path);
         _sortList(filteredFiles, path);
         activeTab.currentFiles = [...filteredFolders, ...filteredFiles];
-      } catch (err) {
+      } catch (err, stack) {
+        DiagnosticLogger.instance.recordHandledError(DiagnosticEvent.directoryLoad, err, stack);
         debugPrint('Error loading restricted directory fallback: $err');
         activeTab.currentFiles = [];
       }
@@ -1852,6 +1858,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> deleteSelected() async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.fileDelete);
     if (selectedPaths.isEmpty) return;
 
     activeTab.isLoading = true;
@@ -1876,7 +1883,9 @@ class FileManagerProvider extends ChangeNotifier {
           }
         }
       }
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileDelete, success: true);
     } catch (e) {
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileDelete, success: false, failure: e);
       debugPrint('Error deleting selected files: $e');
     }
 
@@ -1886,6 +1895,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> pasteFile(BuildContext context, {bool clearAfterPaste = true}) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.pasteStarted);
     if (_clipboardPaths.isEmpty && !_isRemoteClipboard) return;
 
     if (_isRemoteClipboard) {
@@ -1918,7 +1928,8 @@ class FileManagerProvider extends ChangeNotifier {
             ),
           );
         }
-      } catch (e) {
+      } catch (e, stack) {
+        DiagnosticLogger.instance.recordHandledError(DiagnosticEvent.pasteStarted, e, stack);
         debugPrint('Error pasting inside restricted directory: $e');
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -2266,7 +2277,8 @@ class FileManagerProvider extends ChangeNotifier {
         }
       });
 
-    } catch (e) {
+    } catch (e, stack) {
+      DiagnosticLogger.instance.recordHandledError(DiagnosticEvent.pasteStarted, e, stack);
       debugPrint('Error pasting file: $e');
     } finally {
       progressNotifier.value = null;
@@ -2540,6 +2552,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> deleteFile(String path) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.fileDelete);
     try {
       if (RecycleBinService.isEnabled()) {
         await RecycleBinService.moveToTrash(path, useRoot: useRootMode);
@@ -2556,12 +2569,15 @@ class FileManagerProvider extends ChangeNotifier {
         }
       }
       await loadDirectory(currentPath, showLoading: false, clearCache: true);
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileDelete, success: true);
     } catch (e) {
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileDelete, success: false, failure: e);
       debugPrint('Error deleting file: $e');
     }
   }
 
   Future<void> renameFile(String oldPath, String newName) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.fileRename);
     try {
       if (isRestrictedPath(oldPath)) {
         await RootShizukuService.renameItem(oldPath, newName, useRoot: useRootMode);
@@ -2575,12 +2591,15 @@ class FileManagerProvider extends ChangeNotifier {
         }
       }
       await loadDirectory(currentPath, showLoading: false, clearCache: true);
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileRename, success: true);
     } catch (e) {
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileRename, success: false, failure: e);
       debugPrint('Error renaming file: $e');
     }
   }
 
   Future<String?> createFolder(String name) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.folderCreate);
     try {
       String finalName = name;
       final targetPath = p.join(currentPath, name);
@@ -2595,14 +2614,17 @@ class FileManagerProvider extends ChangeNotifier {
         await Directory(newPath).create();
       }
       await loadDirectory(currentPath, showLoading: false, clearCache: true);
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.folderCreate, success: true);
       return finalName;
     } catch (e) {
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.folderCreate, success: false, failure: e);
       debugPrint('Error creating folder: $e');
       return null;
     }
   }
 
   Future<String?> createFile(String name) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.fileCreate);
     try {
       String finalName = name;
       final targetPath = p.join(currentPath, name);
@@ -2617,8 +2639,10 @@ class FileManagerProvider extends ChangeNotifier {
         await File(newPath).create();
       }
       await loadDirectory(currentPath, showLoading: false, clearCache: true);
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileCreate, success: true);
       return finalName;
     } catch (e) {
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileCreate, success: false, failure: e);
       debugPrint('Error creating file: $e');
       return null;
     }
@@ -2676,6 +2700,7 @@ class FileManagerProvider extends ChangeNotifier {
     List<String>? targetPaths,
     BuildContext? context,
   }) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.archiveCreate);
     final paths = targetPaths ?? (selectedPaths.isNotEmpty ? selectedPaths.toList() : [currentPath]);
 
     // Check size limit for TAR.LZ4 and TAR.ZSTD
@@ -2730,7 +2755,8 @@ class FileManagerProvider extends ChangeNotifier {
           deleteSource: deleteSource,
           separateArchives: separateArchives,
         );
-      } catch (e) {
+      } catch (e, stack) {
+        DiagnosticLogger.instance.recordHandledError(DiagnosticEvent.archiveCreate, e, stack);
         debugPrint('Error creating archive: $e');
       }
 
@@ -2762,8 +2788,24 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> extractArchiveDirectly(BuildContext context, String path) async {
+    final logger = DiagnosticLogger.instance;
+    final diagnosticId = logger.nextArchiveOperationId();
+    final format = DiagnosticLogger.archiveFormatCode(path);
+    final started = Stopwatch()..start();
+    logger.recordArchivePhase(
+      operationId: diagnosticId,
+      phase: DiagnosticArchivePhase.requested,
+      format: format,
+    );
+
     final unsupported = ArchiveFormatSupport.unavailableExtractionReason(path);
     if (unsupported != null) {
+      logger.recordArchivePhase(
+        operationId: diagnosticId,
+        phase: DiagnosticArchivePhase.unsupported,
+        format: format,
+        failure: DiagnosticArchiveFailure.unsupportedFormat,
+      );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(unsupported)),
       );
@@ -2776,33 +2818,73 @@ class FileManagerProvider extends ChangeNotifier {
       archiveName: p.basename(path),
       defaultDestDir: destDir,
     );
-    if (res == null || !context.mounted) return;
+    if (res == null || !context.mounted) {
+      logger.recordArchivePhase(
+        operationId: diagnosticId,
+        phase: DiagnosticArchivePhase.dialogCanceled,
+        format: format,
+        elapsedMs: started.elapsedMilliseconds,
+      );
+      return;
+    }
+    logger.recordArchivePhase(
+      operationId: diagnosticId,
+      phase: DiagnosticArchivePhase.configured,
+      format: format,
+      elapsedMs: started.elapsedMilliseconds,
+    );
 
     if (ArchiveFormatSupport.isSplitZipFirstVolume(path)) {
-      // The direct extractor recombines .zip.001, .002, etc. first.
-      // Background extraction cannot do that, so never dispatch it there.
+      // Split ZIP must be handled in-process; background isolate cannot join
+      // its volumes. Do not mark success before the awaited extraction returns.
       final originalDirectory = currentPath;
+      logger.recordArchivePhase(
+        operationId: diagnosticId,
+        phase: DiagnosticArchivePhase.workerStarted,
+        format: format,
+        elapsedMs: started.elapsedMilliseconds,
+      );
       try {
         await ArchiveService.extractArchive(
           archivePath: path,
           destinationDir: res.destinationDir,
           password: res.password,
         );
-        if (!context.mounted) return;
-        if (currentPath == originalDirectory) {
-          await loadDirectory(originalDirectory, showLoading: false, clearCache: true);
-        }
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Split ZIP archive extracted successfully')),
-          );
-        }
-      } catch (e) {
+      } catch (e, stack) {
+        logger.recordArchivePhase(
+          operationId: diagnosticId,
+          phase: DiagnosticArchivePhase.failed,
+          format: format,
+          elapsedMs: started.elapsedMilliseconds,
+          failure: DiagnosticLogger.archiveFailureCode(e),
+          exceptionType: e.runtimeType.toString(),
+          applicationFrames: DiagnosticLogger.safeApplicationFrames(stack),
+        );
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Split ZIP extraction failed: $e')),
           );
         }
+        return;
+      }
+      logger.recordArchivePhase(
+        operationId: diagnosticId,
+        phase: DiagnosticArchivePhase.completed,
+        format: format,
+        elapsedMs: started.elapsedMilliseconds,
+      );
+      if (!context.mounted) return;
+      if (currentPath == originalDirectory) {
+        try {
+          await loadDirectory(originalDirectory, showLoading: false, clearCache: true);
+        } catch (e, stack) {
+          logger.recordHandledError(DiagnosticEvent.directoryLoad, e, stack);
+        }
+      }
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Split ZIP archive extracted successfully')),
+        );
       }
     } else {
       await BackgroundArchiveService.instance.startExtraction(
@@ -2810,6 +2892,7 @@ class FileManagerProvider extends ChangeNotifier {
         archivePath: path,
         destinationDir: res.destinationDir,
         password: res.password,
+        diagnosticId: diagnosticId,
       );
     }
   }
@@ -2928,6 +3011,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> openFile(BuildContext context, String path, {bool showOpenWithPopup = false, bool forceOpenWith = false}) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.fileOpen);
     _highlightedPaths.clear();
     _highlightedPaths.add(path);
     notifyListeners();
@@ -3013,6 +3097,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> moveItem(BuildContext context, String sourcePath, String destFolderPath, {bool showToast = true}) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.fileMove);
     final name = p.basename(sourcePath);
     final destPath = p.join(destFolderPath, name);
 
@@ -3069,7 +3154,9 @@ class FileManagerProvider extends ChangeNotifier {
           SnackBar(content: Text('Moved $name successfully')),
         );
       }
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileMove, success: true);
     } catch (e) {
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileMove, success: false, failure: e);
       debugPrint('Error moving item: $e');
       if (showToast) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -3094,6 +3181,7 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   Future<void> copyItem(BuildContext context, String sourcePath, String destFolderPath, {bool showToast = true}) async {
+    DiagnosticLogger.instance.record(DiagnosticEvent.fileCopy);
     final name = p.basename(sourcePath);
     final destPath = p.join(destFolderPath, name);
 
@@ -3140,7 +3228,9 @@ class FileManagerProvider extends ChangeNotifier {
           SnackBar(content: Text('Copied $name successfully')),
         );
       }
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileCopy, success: true);
     } catch (e) {
+      DiagnosticLogger.instance.recordOutcome(DiagnosticEvent.fileCopy, success: false, failure: e);
       debugPrint('Error copying item: $e');
       if (showToast) {
         ScaffoldMessenger.of(context).showSnackBar(

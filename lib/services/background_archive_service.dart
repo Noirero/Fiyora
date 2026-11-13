@@ -13,6 +13,7 @@ import '../ui/widgets/background_operation_progress_dialog.dart';
 import 'archive_path_safety.dart';
 import 'archive_extraction_safety.dart';
 import 'archive_format_support.dart';
+import 'diagnostic_logger.dart';
 import 'archive_no_overwrite_safety.dart';
 
 class BackgroundOperation {
@@ -57,6 +58,8 @@ class BackgroundArchiveService {
 
   Isolate? _activeIsolate;
   ReceivePort? _receivePort;
+  Stopwatch? _extractionTimer;
+  String? _extractionFormat;
 
   Future<void> startCompression({
     required BuildContext context,
@@ -126,35 +129,81 @@ class BackgroundArchiveService {
     required String archivePath,
     required String destinationDir,
     String? password,
+    String? diagnosticId,
   }) async {
     final archiveName = p.basename(archivePath);
+    final logger = DiagnosticLogger.instance;
+    final format = DiagnosticLogger.archiveFormatCode(archivePath);
     final operation = BackgroundOperation(
-      id: 'extract_${DateTime.now().millisecondsSinceEpoch}',
+      id: diagnosticId ?? logger.nextArchiveOperationId(),
       title: 'Extracting Archive',
       archiveName: archiveName,
       isCompression: false,
     );
+    final timer = Stopwatch()..start();
+    _extractionTimer = timer;
+    _extractionFormat = format;
 
     activeOperation.value = operation;
+    logger.recordArchivePhase(
+      operationId: operation.id,
+      phase: DiagnosticArchivePhase.workerStarted,
+      format: format,
+    );
 
     BackgroundOperationProgressDialog.show(context, this);
-
     _receivePort = ReceivePort();
 
-    _activeIsolate = await Isolate.spawn(
-      extractIsolateTask,
-      {
-        'sendPort': _receivePort!.sendPort,
-        'archivePath': archivePath,
-        'destinationDir': destinationDir,
-        'password': password,
-      },
-    );
+    try {
+      _activeIsolate = await Isolate.spawn(
+        extractIsolateTask,
+        {
+          'sendPort': _receivePort!.sendPort,
+          'archivePath': archivePath,
+          'destinationDir': destinationDir,
+          'password': password,
+        },
+      );
+    } catch (error, trace) {
+      logger.recordArchivePhase(
+        operationId: operation.id,
+        phase: DiagnosticArchivePhase.failed,
+        format: format,
+        elapsedMs: timer.elapsedMilliseconds,
+        failure: DiagnosticLogger.archiveFailureCode(error),
+        exceptionType: error.runtimeType.toString(),
+        applicationFrames: DiagnosticLogger.safeApplicationFrames(trace),
+      );
+      _receivePort?.close();
+      _receivePort = null;
+      _extractionTimer = null;
+      _extractionFormat = null;
+      activeOperation.value = null;
+      rethrow;
+    }
 
     _receivePort!.listen((message) {
       if (message is Map<String, dynamic>) {
         final status = message['status'] as String;
-        if (status == 'progress') {
+        if (status == 'diagnostic') {
+          final rawStage = message['phase'];
+          // The isolate sends an enum name, never paths or filenames.
+          for (final phase in DiagnosticArchivePhase.values) {
+            if (rawStage == phase.name &&
+                (phase == DiagnosticArchivePhase.sourceCheck ||
+                 phase == DiagnosticArchivePhase.decoding ||
+                 phase == DiagnosticArchivePhase.validatePaths ||
+                 phase == DiagnosticArchivePhase.writingOutput)) {
+              logger.recordArchivePhase(
+                operationId: operation.id,
+                phase: phase,
+                format: format,
+                elapsedMs: timer.elapsedMilliseconds,
+              );
+              break;
+            }
+          }
+        } else if (status == 'progress') {
           final progress = message['progress'] as double;
           final currentFile = message['currentFile'] as String;
 
@@ -168,9 +217,36 @@ class BackgroundArchiveService {
             _updateNotification(operation);
           }
         } else if (status == 'completed') {
+          logger.recordArchivePhase(
+            operationId: operation.id,
+            phase: DiagnosticArchivePhase.completed,
+            format: format,
+            elapsedMs: timer.elapsedMilliseconds,
+          );
+          _extractionTimer = null;
+          _extractionFormat = null;
           _onOperationComplete(context, operation, 'Archive extracted successfully');
         } else if (status == 'error') {
           final error = message['error'] as String;
+          final codeName = message['diagnosticCode'];
+          var category = DiagnosticArchiveFailure.unknown;
+          for (final candidate in DiagnosticArchiveFailure.values) {
+            if (codeName == candidate.name) {
+              category = candidate;
+              break;
+            }
+          }
+          logger.recordArchivePhase(
+            operationId: operation.id,
+            phase: DiagnosticArchivePhase.failed,
+            format: format,
+            elapsedMs: timer.elapsedMilliseconds,
+            failure: category,
+            exceptionType: message['diagnosticType'] as String?,
+            applicationFrames: message['diagnosticFrames'] as String?,
+          );
+          _extractionTimer = null;
+          _extractionFormat = null;
           _onOperationComplete(context, operation, 'Extraction failed: $error', isError: true);
         }
       }
@@ -178,6 +254,17 @@ class BackgroundArchiveService {
   }
 
   void cancelOperation() {
+    final current = activeOperation.value;
+    if (current != null && !current.isCompression) {
+      DiagnosticLogger.instance.recordArchivePhase(
+        operationId: current.id,
+        phase: DiagnosticArchivePhase.canceled,
+        format: _extractionFormat ?? 'unknown',
+        elapsedMs: _extractionTimer?.elapsedMilliseconds,
+      );
+      _extractionTimer = null;
+      _extractionFormat = null;
+    }
     _activeIsolate?.kill(priority: Isolate.beforeNextEvent);
     _activeIsolate = null;
     _receivePort?.close();
@@ -417,23 +504,37 @@ class BackgroundArchiveService {
     final destinationDir = args['destinationDir'] as String;
     final password = args['password'] as String?;
 
+    void reportStage(DiagnosticArchivePhase phase) {
+      sendPort.send({'status': 'diagnostic', 'phase': phase.name});
+    }
+
     try {
+      reportStage(DiagnosticArchivePhase.sourceCheck);
       ArchiveFormatSupport.requireExtractable(archivePath, background: true);
       sendPort.send({'status': 'progress', 'progress': 0.0, 'currentFile': 'Reading archive...'});
 
       final file = File(archivePath);
       if (!file.existsSync()) {
-        sendPort.send({'status': 'error', 'error': 'Archive file not found'});
+        sendPort.send({
+          'status': 'error',
+          'error': 'Archive file not found',
+          'diagnosticCode': DiagnosticArchiveFailure.sourceMissing.name,
+          'diagnosticType': 'MissingSource',
+          'diagnosticFrames': '',
+        });
         return;
       }
       final lowerPath = archivePath.toLowerCase();
+      reportStage(DiagnosticArchivePhase.decoding);
 
       // stream zip files to avoid OOM
       if (lowerPath.endsWith('.zip') || lowerPath.contains('.zip.')) {
         sendPort.send({'status': 'progress', 'progress': 0.1, 'currentFile': 'Opening zip...'});
         final inputStream = InputFileStream(archivePath);
         final archive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
+        reportStage(DiagnosticArchivePhase.validatePaths);
         validateArchiveExtractionPlan(destinationDir, archive.files);
+        reportStage(DiagnosticArchivePhase.writingOutput);
         final totalFiles = archive.length;
         
         for (int i = 0; i < totalFiles; i++) {
@@ -476,7 +577,9 @@ class BackgroundArchiveService {
         sendPort.send({'status': 'progress', 'progress': 0.3, 'currentFile': 'Extracting tar...'});
         final tarInputStream = InputFileStream(tempTarFile.path);
         final archive = TarDecoder().decodeBuffer(tarInputStream);
+        reportStage(DiagnosticArchivePhase.validatePaths);
         validateArchiveExtractionPlan(destinationDir, archive.files);
+        reportStage(DiagnosticArchivePhase.writingOutput);
         final totalFiles = archive.length;
         
         for (int i = 0; i < totalFiles; i++) {
@@ -514,7 +617,9 @@ class BackgroundArchiveService {
         sendPort.send({'status': 'progress', 'progress': 0.1, 'currentFile': 'Opening tar...'});
         final inputStream = InputFileStream(archivePath);
         final archive = TarDecoder().decodeBuffer(inputStream);
+        reportStage(DiagnosticArchivePhase.validatePaths);
         validateArchiveExtractionPlan(destinationDir, archive.files);
+        reportStage(DiagnosticArchivePhase.writingOutput);
         final totalFiles = archive.length;
         
         for (int i = 0; i < totalFiles; i++) {
@@ -560,6 +665,7 @@ class BackgroundArchiveService {
       } else if (lowerPath.endsWith('.gz')) {
         final decodedBytes = GZipDecoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
+        reportStage(DiagnosticArchivePhase.writingOutput);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         destFile.createSync(recursive: true, exclusive: true);
         destFile.writeAsBytesSync(decodedBytes);
@@ -568,6 +674,7 @@ class BackgroundArchiveService {
       } else if (lowerPath.endsWith('.bz2')) {
         final decodedBytes = BZip2Decoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
+        reportStage(DiagnosticArchivePhase.writingOutput);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         destFile.createSync(recursive: true, exclusive: true);
         destFile.writeAsBytesSync(decodedBytes);
@@ -576,6 +683,7 @@ class BackgroundArchiveService {
       } else if (lowerPath.endsWith('.lz4')) {
         final decodedBytes = lz4FrameDecode(bytes);
         final name = p.basenameWithoutExtension(archivePath);
+        reportStage(DiagnosticArchivePhase.writingOutput);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         destFile.createSync(recursive: true, exclusive: true);
         destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
@@ -584,6 +692,7 @@ class BackgroundArchiveService {
       } else if (lowerPath.endsWith('.zst') || lowerPath.endsWith('.zstd')) {
         final decodedBytes = const ZstdDecoder().decodeBytes(bytes);
         final name = p.basenameWithoutExtension(archivePath);
+        reportStage(DiagnosticArchivePhase.writingOutput);
         final destFile = File(checkedNewArchiveExtractionFilePath(destinationDir, name));
         destFile.createSync(recursive: true, exclusive: true);
         destFile.writeAsBytesSync(Uint8List.fromList(decodedBytes));
@@ -595,7 +704,9 @@ class BackgroundArchiveService {
         final inputStream = InputFileStream(archivePath);
         try {
           final zipArchive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
-          validateArchiveExtractionPlan(destinationDir, zipArchive.files);
+          reportStage(DiagnosticArchivePhase.validatePaths);
+        validateArchiveExtractionPlan(destinationDir, zipArchive.files);
+        reportStage(DiagnosticArchivePhase.writingOutput);
           final totalFiles = zipArchive.length;
           
           for (int i = 0; i < totalFiles; i++) {
@@ -631,7 +742,9 @@ class BackgroundArchiveService {
 
       sendPort.send({'status': 'progress', 'progress': 0.3, 'currentFile': 'Extracting files...'});
 
-      validateArchiveExtractionPlan(destinationDir, archive.files);
+      reportStage(DiagnosticArchivePhase.validatePaths);
+        validateArchiveExtractionPlan(destinationDir, archive.files);
+        reportStage(DiagnosticArchivePhase.writingOutput);
       final totalFiles = archive.length;
       for (int i = 0; i < totalFiles; i++) {
         final fileEntry = archive[i];
@@ -660,8 +773,16 @@ class BackgroundArchiveService {
       });
       await Future.delayed(const Duration(milliseconds: 300));
       sendPort.send({'status': 'completed'});
-    } catch (e) {
-      sendPort.send({'status': 'error', 'error': e.toString()});
+    } catch (e, trace) {
+      // Keep raw exception text only in the existing on-device UI channel.
+      // Diagnostic fields cross the isolate boundary already sanitized.
+      sendPort.send({
+        'status': 'error',
+        'error': e.toString(),
+        'diagnosticCode': DiagnosticLogger.archiveFailureCode(e).name,
+        'diagnosticType': e.runtimeType.toString(),
+        'diagnosticFrames': DiagnosticLogger.safeApplicationFrames(trace),
+      });
     }
   }
 }

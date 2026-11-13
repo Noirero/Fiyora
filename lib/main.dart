@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -14,6 +15,7 @@ import 'core/icon_fonts/broken_icons.dart';
 import 'providers/file_manager_provider.dart';
 import 'providers/media_provider.dart';
 import 'services/preferences_service.dart';
+import 'services/diagnostic_logger.dart';
 import 'services/network_connections_service.dart';
 import 'services/intent_handler_service.dart';
 import 'services/pin_service.dart';
@@ -23,9 +25,36 @@ import 'package:audio_service/audio_service.dart';
 import 'ui/screens/home_screen.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+final GlobalKey<ScaffoldMessengerState> diagnosticsMessengerKey =
+    GlobalKey<ScaffoldMessengerState>();
+final NavigatorObserver _diagnosticNavigationObserver = _DiagnosticNavigationObserver();
+
+class _DiagnosticNavigationObserver extends NavigatorObserver {
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    DiagnosticLogger.instance.record(DiagnosticEvent.navigationPush);
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    DiagnosticLogger.instance.record(DiagnosticEvent.navigationPop);
+  }
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await DiagnosticLogger.instance.initialize();
+  final oldFlutterError = FlutterError.onError;
+  FlutterError.onError = (details) {
+    DiagnosticLogger.instance.captureException(
+      'flutter_framework', details.exception, details.stack);
+    oldFlutterError?.call(details);
+  };
+  final oldPlatformError = ui.PlatformDispatcher.instance.onError;
+  ui.PlatformDispatcher.instance.onError = (error, trace) {
+    DiagnosticLogger.instance.captureException('platform_dispatcher', error, trace);
+    return oldPlatformError?.call(error, trace) ?? false;
+  };
   MediaKit.ensureInitialized();
   await PreferencesService.init();
   await PinService.init();
@@ -117,7 +146,7 @@ class NFileApp extends StatefulWidget {
   State<NFileApp> createState() => _NFileAppState();
 }
 
-class _NFileAppState extends State<NFileApp> {
+class _NFileAppState extends State<NFileApp> with WidgetsBindingObserver {
   bool? _hasPermission;
   bool _sharingObserverSetup = false;
   bool _isResolvingIntent = false;
@@ -126,6 +155,16 @@ class _NFileAppState extends State<NFileApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final classification = DiagnosticLogger.instance.startupClassification;
+    if (classification == 'confirmed_crash' ||
+        classification == 'unknown_termination') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        diagnosticsMessengerKey.currentState?.showSnackBar(const SnackBar(
+          content: Text('Previous process ended unexpectedly. Diagnostic report is available in Settings.'),
+        ));
+      });
+    }
     final hideNav = PreferencesService.getHideNavigationBar();
     if (hideNav) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: [SystemUiOverlay.top]);
@@ -160,8 +199,18 @@ class _NFileAppState extends State<NFileApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _sharingIntentSubscription?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      DiagnosticLogger.instance.record(DiagnosticEvent.appResumed);
+    } else if (state == AppLifecycleState.paused) {
+      DiagnosticLogger.instance.record(DiagnosticEvent.appPaused);
+    }
   }
 
   Future<void> _initializeApplication() async {
@@ -316,6 +365,8 @@ class _NFileAppState extends State<NFileApp> {
 
             return MaterialApp(
               navigatorKey: navigatorKey,
+              scaffoldMessengerKey: diagnosticsMessengerKey,
+              navigatorObservers: [_diagnosticNavigationObserver],
               title: 'Fiyora Explorer Beta',
               debugShowCheckedModeBanner: false,
               theme: AppTheme.getAppTheme(light: true, seed: baseSeedColor, customScheme: activeLightScheme, fontFamily: fileManager.fontFamilyOption),
