@@ -282,15 +282,12 @@ class BackgroundArchiveService {
     if (operation == null) return;
 
     final status = await Permission.notification.request();
+    if (!identical(activeOperation.value, operation)) return;
+    operation.isRunningInBackground = true;
+    // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+    activeOperation.notifyListeners();
     if (status.isGranted) {
-      operation.isRunningInBackground = true;
-      // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
-      activeOperation.notifyListeners();
-      _updateNotification(operation);
-    } else {
-      operation.isRunningInBackground = true;
-      // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
-      activeOperation.notifyListeners();
+      await _updateNotification(operation);
     }
   }
 
@@ -320,41 +317,63 @@ class BackgroundArchiveService {
     } catch (_) {}
   }
 
-  void _onOperationComplete(BuildContext context, BackgroundOperation operation, String message, {bool isError = false}) async {
+  Future<void> _onOperationComplete(
+    BuildContext context,
+    BackgroundOperation operation,
+    String message, {
+    bool isError = false,
+  }) async {
+    if (!identical(activeOperation.value, operation)) return;
     _activeIsolate = null;
     _receivePort?.close();
     _receivePort = null;
 
-    if (operation.isRunningInBackground) {
-      if (Platform.isAndroid) {
+    try {
+      if (operation.isRunningInBackground && Platform.isAndroid) {
         final id = operation.id.hashCode;
-        await _channel.invokeMethod('showProgressNotification', {
-          'id': id,
-          'title': isError ? 'Operation Failed' : 'Successful',
-          'message': isError ? 'Compression/extraction failed.' : '${operation.archiveName} processed successfully.',
-          'progress': 100,
-          'max': 100,
-          'indeterminate': false,
-        });
-        Future.delayed(const Duration(seconds: 5), () {
-          _channel.invokeMethod('cancelNotification', {'id': id});
-        });
+        try {
+          await _channel.invokeMethod('showProgressNotification', {
+            'id': id,
+            'title': isError ? 'Operation Failed' : 'Successful',
+            'message': isError
+                ? 'Compression/extraction failed.'
+                : '${operation.archiveName} processed successfully.',
+            'progress': 100,
+            'max': 100,
+            'indeterminate': false,
+          });
+          Future<void>.delayed(
+            const Duration(seconds: 5),
+            () => _cancelNotification(operation),
+          );
+        } catch (error) {
+          debugPrint('Error showing archive result notification: $error');
+        }
+      }
+
+      if (!context.mounted || !identical(activeOperation.value, operation)) {
+        return;
+      }
+      try {
+        final provider = Provider.of<FileManagerProvider>(context, listen: false);
+        await provider.loadDirectory(provider.currentPath, showLoading: false);
+      } catch (_) {}
+
+      if (!context.mounted || !identical(activeOperation.value, operation)) {
+        return;
+      }
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: isError ? Colors.redAccent : Colors.green,
+        ),
+      );
+    } finally {
+      // A canceled operation may have been replaced during an await.
+      if (identical(activeOperation.value, operation)) {
+        activeOperation.value = null;
       }
     }
-
-    try {
-      final provider = Provider.of<FileManagerProvider>(context, listen: false);
-      await provider.loadDirectory(provider.currentPath, showLoading: false);
-    } catch (_) {}
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? Colors.redAccent : Colors.green,
-      ),
-    );
-
-    activeOperation.value = null;
   }
 
   @visibleForTesting
