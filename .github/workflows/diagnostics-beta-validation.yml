@@ -47,8 +47,16 @@ jobs:
             echo "// Duplicate class cleared; Kotlin implementation remains." > "$FILE"
           fi
 
-      - name: Run targeted diagnostic tests
-        run: flutter test test/diagnostic_logger_test.dart test/diagnostic_logger_observability_test.dart test/archive_compression_routing_test.dart test/archive_format_capability_test.dart
+      - name: Run targeted diagnostics and extraction regression tests
+        run: |
+          flutter test test/diagnostic_logger_test.dart \
+            test/diagnostic_logger_observability_test.dart \
+            test/archive_compression_routing_test.dart \
+            test/archive_format_capability_test.dart \
+            test/archive_no_overwrite_test.dart \
+            test/archive_extraction_safety_test.dart \
+            test/archive_decode_failure_preservation_test.dart \
+            test/tab_regression_test.dart
 
       - name: Build arm64-v8a only debug APK (never release)
         run: flutter build apk --debug --split-per-abi --target-platform android-arm64 --no-tree-shake-icons
@@ -69,7 +77,7 @@ jobs:
       - name: Upload arm64-v8a test-only APK
         uses: actions/upload-artifact@v4
         with:
-          name: FIYORA-diagnostic-logger-observability-arm64-v8a-debug-apk
+          name: FIYORA-test-arm64-${{ github.sha }}
           path: build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk
           retention-days: 7
           if-no-files-found: error

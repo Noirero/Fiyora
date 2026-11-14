@@ -44,7 +44,12 @@ void main() {
     return File(p.join(fixture.path, archiveName))..writeAsBytesSync(encoded);
   }
 
-  Future<Map> background(String worker, String archivePath, {String? destinationPath}) async {
+  Future<Map> background(
+    String worker,
+    String archivePath, {
+    String? destinationPath,
+    String? extractionDestination,
+  }) async {
     final port = ReceivePort();
     Isolate? isolate;
     try {
@@ -55,7 +60,7 @@ void main() {
         <String, dynamic>{
           'sendPort': port.sendPort,
           'archivePath': archivePath,
-          'destinationDir': destination.path,
+          'destinationDir': extractionDestination ?? destination.path,
           'sourcePaths': <String>[source.path],
           'destinationPath': destinationPath,
           'format': 'zip',
@@ -192,6 +197,53 @@ void main() {
       throwsA(isA<Exception>()),
     );
     expect(existing.readAsStringSync(), 'KEEP');
+  });
+
+  for (final useWorker in [false, true]) {
+    final route = useWorker ? 'background' : 'direct';
+    test('$route ZIP creates a missing nested destination', () async {
+      final missing = p.join(fixture.path, 'new-parent', 'output');
+      final archive = zip('new-target.zip', [
+        ArchiveFile('sub/probe.txt', 3, utf8.encode('NEW')),
+      ]);
+      final original = archive.readAsBytesSync();
+      expect(Directory(missing).existsSync(), isFalse);
+
+      if (useWorker) {
+        final result = await background('extract', archive.path,
+            extractionDestination: missing);
+        expect(result['status'], 'completed', reason: '$result');
+      } else {
+        await ArchiveService.extractArchive(
+          archivePath: archive.path,
+          destinationDir: missing,
+        );
+      }
+
+      expect(File(p.join(missing, 'sub', 'probe.txt')).readAsStringSync(), 'NEW');
+      expect(archive.readAsBytesSync(), original);
+    });
+  }
+
+  test('preflight still rejects traversal for a missing destination', () {
+    final missing = p.join(fixture.path, 'missing');
+    expect(
+      () => validateArchiveExtractionPlan(missing, [
+        ArchiveFile('../escape.txt', 3, utf8.encode('NEW')),
+      ]),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(File(p.join(fixture.path, 'escape.txt')).existsSync(), isFalse);
+  });
+
+  test('preflight rejects a file used as the destination', () {
+    expect(
+      () => validateArchiveExtractionPlan(source.path, [
+        ArchiveFile('probe.txt', 3, utf8.encode('NEW')),
+      ]),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(source.readAsStringSync(), 'NEW');
   });
 
   test('normal ZIP extraction to empty folder still works', () async {

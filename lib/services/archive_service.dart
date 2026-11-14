@@ -236,24 +236,27 @@ class ArchiveService {
       // stream zip files to avoid OOM
       if (lowerPath.endsWith('.zip') || lowerPath.contains('.zip.')) {
         final inputStream = InputFileStream(archivePath);
-        final archive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
-        
-        validateArchiveExtractionPlan(destinationDir, archive.files);
-        for (final fileEntry in archive.files) {
-          final filename = fileEntry.name;
-          final destPath = fileEntry.isFile
-              ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
-              : checkedArchiveExtractionPath(destinationDir, filename);
-          if (fileEntry.isFile) {
-            createArchiveOutputExclusively(File(destPath), recursive: true);
-            final outputStream = OutputFileStream(destPath);
-            fileEntry.writeContent(outputStream);
-            outputStream.closeSync();
-          } else {
-            Directory(destPath).createSync(recursive: true);
+        try {
+          final archive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
+
+          validateArchiveExtractionPlan(destinationDir, archive.files);
+          for (final fileEntry in archive.files) {
+            final filename = fileEntry.name;
+            final destPath = fileEntry.isFile
+                ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
+                : checkedArchiveExtractionPath(destinationDir, filename);
+            if (fileEntry.isFile) {
+              createArchiveOutputExclusively(File(destPath), recursive: true);
+              final outputStream = OutputFileStream(destPath);
+              fileEntry.writeContent(outputStream);
+              outputStream.closeSync();
+            } else {
+              Directory(destPath).createSync(recursive: true);
+            }
           }
+        } finally {
+          inputStream.closeSync();
         }
-        inputStream.closeSync();
         return;
       }
 
