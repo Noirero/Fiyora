@@ -1523,7 +1523,9 @@ class _DirectoryScreenState extends State<DirectoryScreen> {
                               position: PopupMenuPosition.under,
                               elevation: 8,
                               onSelected: (action) async {
-                                if (action == 'select_all') {
+                                if (action == 'open_in_new_tab') {
+                                  provider.openSelectedFolderInNewTab();
+                                } else if (action == 'select_all') {
                                   provider.selectAll();
                                 } else if (action == 'share') {
                                   final selectedPaths = provider.selectedPaths
@@ -1584,6 +1586,17 @@ class _DirectoryScreenState extends State<DirectoryScreen> {
                                       (p) => PinService.isPinned(p),
                                     );
                                 return [
+                                  if (provider.canOpenSelectedFolderInNewTab)
+                                    const PopupMenuItem<String>(
+                                      value: 'open_in_new_tab',
+                                      child: Row(
+                                        children: [
+                                          Icon(Broken.add, size: 20),
+                                          SizedBox(width: 12),
+                                          Text('Open in New Tab'),
+                                        ],
+                                      ),
+                                    ),
                                   const PopupMenuItem<String>(
                                     value: 'select_all',
                                     child: Row(

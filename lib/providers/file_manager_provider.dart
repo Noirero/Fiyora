@@ -941,6 +941,8 @@ class FileManagerProvider extends ChangeNotifier {
   int _activeTabIndex = 0;
   final Map<String, StreamSubscription<FileSystemEntity>?> _searchSubscriptions = {};
 
+  final Map<String, Object> _searchRequests = {};
+
   List<FolderTab> get tabs => _tabs;
   int get activeTabIndex => _activeTabIndex;
 
@@ -1073,8 +1075,12 @@ class FileManagerProvider extends ChangeNotifier {
     final tab = _tabs[tabIndex];
 
     // Cancel existing search for this tab
-    _searchSubscriptions[tab.id]?.cancel();
-    _searchSubscriptions[tab.id] = null;
+    cancelSearchForTab(tab.id);
+    final request = Object();
+    _searchRequests[tab.id] = request;
+
+    bool isCurrent() =>
+        identical(_searchRequests[tab.id], request) && _tabs.contains(tab);
 
     tab.searchQuery = query.trim();
     tab.searchFilter = filter;
@@ -1106,7 +1112,7 @@ class FileManagerProvider extends ChangeNotifier {
     if (filter == 'All' || filter == 'Docs') {
       final matchingDocs = <FileSystemEntity>[];
       for (final doc in mediaProvider.documents) {
-        if (!isGlobal && !doc.path.startsWith(rootPath)) continue;
+        if (!isGlobal && !p.isWithin(rootPath, doc.path)) continue;
         final name = p.basename(doc.path);
         if (name.toLowerCase().contains(qLower) && !seenPaths.contains(doc.path)) {
           seenPaths.add(doc.path);
@@ -1115,8 +1121,8 @@ class FileManagerProvider extends ChangeNotifier {
       }
       if (matchingDocs.isNotEmpty) {
         Future.wait(matchingDocs.map((doc) => FileItemModel.fromEntityAsync(doc))).then((resolvedDocs) {
-          if (tabIndex < _tabs.length && _tabs[tabIndex].id == tab.id) {
-            _tabs[tabIndex].searchResults = [..._tabs[tabIndex].searchResults, ...resolvedDocs];
+          if (isCurrent()) {
+            tab.searchResults = [...tab.searchResults, ...resolvedDocs];
             notifyListeners();
           }
         });
@@ -1126,7 +1132,7 @@ class FileManagerProvider extends ChangeNotifier {
     if (filter == 'All' || filter == 'Audio') {
       for (final song in mediaProvider.audios) {
         final path = song.data;
-        if (!isGlobal && !path.startsWith(rootPath)) continue;
+        if (!isGlobal && !p.isWithin(rootPath, path)) continue;
         final name = p.basename(path);
         if (name.toLowerCase().contains(qLower) && !seenPaths.contains(path)) {
           seenPaths.add(path);
@@ -1199,8 +1205,8 @@ class FileManagerProvider extends ChangeNotifier {
           if (matchFilter && !seenPaths.contains(entity.path)) {
             seenPaths.add(entity.path);
             FileItemModel.fromEntityAsync(entity).then((item) {
-              if (tabIndex < _tabs.length && _tabs[tabIndex].id == tab.id) {
-                _tabs[tabIndex].searchResults = [..._tabs[tabIndex].searchResults, item];
+              if (isCurrent()) {
+                tab.searchResults = [...tab.searchResults, item];
                 notifyListeners();
               }
             });
@@ -1209,8 +1215,8 @@ class FileManagerProvider extends ChangeNotifier {
       },
       onError: (_) {},
       onDone: () {
-        if (tabIndex < _tabs.length && _tabs[tabIndex].id == tab.id) {
-          _tabs[tabIndex].isSearching = false;
+        if (isCurrent()) {
+          tab.isSearching = false;
           notifyListeners();
         }
       },
@@ -1243,8 +1249,8 @@ class FileManagerProvider extends ChangeNotifier {
   }
 
   void cancelSearchForTab(String tabId) {
-    _searchSubscriptions[tabId]?.cancel();
-    _searchSubscriptions[tabId] = null;
+    _searchRequests.remove(tabId);
+    _searchSubscriptions.remove(tabId)?.cancel();
   }
 
   // --- Active Tab Delegations ---
@@ -1814,6 +1820,21 @@ class FileManagerProvider extends ChangeNotifier {
   void clearSelection() {
     selectedPaths.clear();
     notifyListeners();
+  }
+
+  bool get canOpenSelectedFolderInNewTab {
+    if (!enableMultipleTabs || enableSplitScreen || selectedPaths.length != 1) {
+      return false;
+    }
+    final path = selectedPaths.single;
+    return currentFiles.any((item) => item.path == path && item.isDirectory);
+  }
+
+  void openSelectedFolderInNewTab() {
+    if (!canOpenSelectedFolderInNewTab) return;
+    final path = selectedPaths.single;
+    clearSelection();
+    addTab(path);
   }
 
   Future<void> togglePinPath(String path) async {
