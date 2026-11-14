@@ -47,8 +47,15 @@ jobs:
             echo "// Duplicate class cleared; Kotlin implementation remains." > "$FILE"
           fi
 
-      - name: Run targeted diagnostic tests
-        run: flutter test test/diagnostic_logger_test.dart test/diagnostic_logger_observability_test.dart test/archive_compression_routing_test.dart test/archive_format_capability_test.dart
+      - name: Run targeted diagnostics and extraction regression tests
+        run: |
+          flutter test test/diagnostic_logger_test.dart \
+            test/diagnostic_logger_observability_test.dart \
+            test/archive_compression_routing_test.dart \
+            test/archive_format_capability_test.dart \
+            test/archive_no_overwrite_test.dart \
+            test/archive_extraction_safety_test.dart \
+            test/archive_decode_failure_preservation_test.dart
 
       - name: Build arm64-v8a only debug APK (never release)
         run: flutter build apk --debug --split-per-abi --target-platform android-arm64 --no-tree-shake-icons

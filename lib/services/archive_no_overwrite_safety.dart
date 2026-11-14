@@ -35,7 +35,15 @@ void validateArchiveExtractionPlan(
   String destinationDir,
   Iterable<ArchiveFile> entries,
 ) {
-  final root = Directory(destinationDir).absolute.resolveSymbolicLinksSync();
+  if (entries.isEmpty) return;
+
+  // Canonicalization requires an existing directory. The user can select
+  // a new destination; create it before validating entry paths.
+  final destination = Directory(destinationDir).absolute;
+  if (!destination.existsSync()) {
+    destination.createSync(recursive: true);
+  }
+  final root = destination.resolveSymbolicLinksSync();
   final targets = <String, bool>{}; // true = file, false = directory
 
   for (final entry in entries) {
