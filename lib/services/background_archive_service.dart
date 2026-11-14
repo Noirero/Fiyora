@@ -531,35 +531,38 @@ class BackgroundArchiveService {
       if (lowerPath.endsWith('.zip') || lowerPath.contains('.zip.')) {
         sendPort.send({'status': 'progress', 'progress': 0.1, 'currentFile': 'Opening zip...'});
         final inputStream = InputFileStream(archivePath);
-        final archive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
-        reportStage(DiagnosticArchivePhase.validatePaths);
-        validateArchiveExtractionPlan(destinationDir, archive.files);
-        reportStage(DiagnosticArchivePhase.writingOutput);
-        final totalFiles = archive.length;
-        
-        for (int i = 0; i < totalFiles; i++) {
-          final fileEntry = archive[i];
-          final progress = 0.2 + (i / totalFiles) * 0.8;
-          sendPort.send({
-            'status': 'progress',
-            'progress': progress,
-            'currentFile': fileEntry.name,
-          });
+        try {
+          final archive = ZipDecoder().decodeBuffer(inputStream, password: password != null && password.isNotEmpty ? password : null);
+          reportStage(DiagnosticArchivePhase.validatePaths);
+          validateArchiveExtractionPlan(destinationDir, archive.files);
+          reportStage(DiagnosticArchivePhase.writingOutput);
+          final totalFiles = archive.length;
 
-          final filename = fileEntry.name;
-          final destPath = fileEntry.isFile
-              ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
-              : checkedArchiveExtractionPath(destinationDir, filename);
-          if (fileEntry.isFile) {
-            createArchiveOutputExclusively(File(destPath), recursive: true);
-            final outputStream = OutputFileStream(destPath);
-            fileEntry.writeContent(outputStream);
-            outputStream.closeSync();
-          } else {
-            Directory(destPath).createSync(recursive: true);
+          for (int i = 0; i < totalFiles; i++) {
+            final fileEntry = archive[i];
+            final progress = 0.2 + (i / totalFiles) * 0.8;
+            sendPort.send({
+              'status': 'progress',
+              'progress': progress,
+              'currentFile': fileEntry.name,
+            });
+
+            final filename = fileEntry.name;
+            final destPath = fileEntry.isFile
+                ? checkedNewArchiveExtractionFilePath(destinationDir, filename)
+                : checkedArchiveExtractionPath(destinationDir, filename);
+            if (fileEntry.isFile) {
+              createArchiveOutputExclusively(File(destPath), recursive: true);
+              final outputStream = OutputFileStream(destPath);
+              fileEntry.writeContent(outputStream);
+              outputStream.closeSync();
+            } else {
+              Directory(destPath).createSync(recursive: true);
+            }
           }
+        } finally {
+          inputStream.closeSync();
         }
-        inputStream.closeSync();
         sendPort.send({'status': 'completed'});
         return;
       }
