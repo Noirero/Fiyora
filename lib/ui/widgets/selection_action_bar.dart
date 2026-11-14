@@ -123,7 +123,9 @@ class SelectionActionBar extends StatelessWidget {
               position: PopupMenuPosition.under,
               elevation: 8,
               onSelected: (action) async {
-                if (action == 'archive') {
+                if (action == 'open_in_new_tab') {
+                  provider.openSelectedFolderInNewTab();
+                } else if (action == 'archive') {
                   final res = await CreateArchiveDialog.show(
                     context,
                     initialName: p.basename(provider.currentPath).isEmpty ? 'archive' : p.basename(provider.currentPath),
@@ -182,6 +184,17 @@ class SelectionActionBar extends StatelessWidget {
                 final selected = provider.selectedPaths.toList();
                 final allPinned = selected.isNotEmpty && selected.every((p) => PinService.isPinned(p));
                 return [
+                  if (provider.canOpenSelectedFolderInNewTab)
+                    const PopupMenuItem(
+                      value: 'open_in_new_tab',
+                      child: Row(
+                        children: [
+                          Icon(Broken.add, size: 20),
+                          SizedBox(width: 12),
+                          Text('Open in New Tab'),
+                        ],
+                      ),
+                    ),
                   const PopupMenuItem(
                     value: 'archive',
                     child: Row(
